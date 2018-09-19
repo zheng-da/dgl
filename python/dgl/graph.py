@@ -780,7 +780,7 @@ class DGLGraph(object):
         """
         self._apply_edge_func = (apply_edge_func, batchable)
 
-    def apply_nodes(self, v, apply_node_func="default", batchable=False):
+    def apply_nodes(self, v, apply_node_func="default", batchable=False, writeback=True):
         """Apply the function on node representations.
 
         Parameters
@@ -799,7 +799,8 @@ class DGLGraph(object):
             return
         if batchable:
             new_repr = apply_node_func(self.get_n_repr(v))
-            self.set_n_repr(new_repr, v)
+            if writeback:
+                self.set_n_repr(new_repr, v)
         else:
             raise RuntimeError('Disabled')
             if is_all(v):
@@ -808,6 +809,7 @@ class DGLGraph(object):
             for vv in utils.node_iter(v):
                 ret = apply_node_func(_get_repr(self.nodes[vv]))
                 _set_repr(self.nodes[vv], ret)
+        return new_repr
 
     def apply_edges(self, u, v, apply_edge_func="default", batchable=False):
         """Apply the function on edge representations.
@@ -976,7 +978,8 @@ class DGLGraph(object):
              u,
              reduce_func="default",
              apply_node_func="default",
-             batchable=False):
+             batchable=False,
+             writeback=True):
         """Receive and reduce in-coming messages and update representation on node u.
 
         It computes the new node state using the messages sent from the predecessors
@@ -1015,11 +1018,17 @@ class DGLGraph(object):
         if isinstance(reduce_func, (list, tuple)):
             reduce_func = BundledReduceFunction(reduce_func)
         if batchable:
-            self._batch_recv(u, reduce_func)
+            accum = self._batch_recv(u, reduce_func, writeback=writeback)
         else:
+            assert writeback
             self._nonbatch_recv(u, reduce_func)
         # optional apply nodes
-        self.apply_nodes(u, apply_node_func, batchable)
+        if writeback:
+            return self.apply_nodes(u, apply_node_func, batchable, writeback=writeback)
+        else:
+            if isinstance(accum, dict):
+                accum.update(self.get_n_repr(u))
+            return apply_node_func(accum)
 
     def _nonbatch_recv(self, u, reduce_func):
         raise RuntimeError('Disabled')
@@ -1035,7 +1044,7 @@ class DGLGraph(object):
                 new_repr = reduce_func(_get_repr(self.nodes[uu]), msgs_batch)
                 _set_repr(self.nodes[uu], new_repr)
 
-    def _batch_recv(self, v, reduce_func):
+    def _batch_recv(self, v, reduce_func, writeback=True):
         if self._msg_frame.num_rows == 0:
             # no message has ever been sent
             return
@@ -1096,16 +1105,20 @@ class DGLGraph(object):
             _, indices = F.sort(reordered_v)
             indices = utils.toindex(indices)
             new_reprs = utils.reorder(new_reprs, indices)
-            self.set_n_repr(new_reprs)
+            if writeback:
+                self.set_n_repr(new_reprs)
         else:
             # Use setter to do reorder.
-            self.set_n_repr(new_reprs, reordered_v)
+            if writeback:
+                self.set_n_repr(new_reprs, reordered_v)
+        return new_reprs
 
     def _send_and_recv(self, u, v, unique_v,
                        message_func="default",
                        reduce_func="default",
                        apply_node_func="default",
-                       batchable=False):
+                       batchable=False,
+                       writeback=True):
         u = utils.toindex(u)
         v = utils.toindex(v)
         if len(u) == 0:
@@ -1123,6 +1136,7 @@ class DGLGraph(object):
         assert reduce_func is not None
 
         if batchable:
+            # TODO(zhengda) how to support writeback?
             executor = scheduler.get_executor(
                     'send_and_recv', self, src=u, dst=v,
                     message_func=message_func, reduce_func=reduce_func)
@@ -1131,10 +1145,12 @@ class DGLGraph(object):
 
         if executor:
             executor.run()
+            return self.apply_nodes(unique_v, apply_node_func, batchable=batchable,
+                                    writeback=writeback)
         else:
             self.send(u, v, message_func, batchable=batchable)
-            self.recv(unique_v, reduce_func, None, batchable=batchable)
-        self.apply_nodes(unique_v, apply_node_func, batchable=batchable)
+            return self.recv(unique_v, reduce_func, apply_node_func,
+                             batchable=batchable, writeback=writeback)
 
     def send_and_recv(self,
                       u, v,
@@ -1173,7 +1189,8 @@ class DGLGraph(object):
              message_func="default",
              reduce_func="default",
              apply_node_func="default",
-             batchable=False):
+             batchable=False,
+             writeback=True):
         """Pull messages from the node's predecessors and then update it.
 
         Parameters
@@ -1193,8 +1210,9 @@ class DGLGraph(object):
         if len(v) == 0:
             return
         uu, vv, _ = self._graph.in_edges(v)
-        self._send_and_recv(uu, vv, v, message_func, reduce_func,
-                apply_node_func=apply_node_func, batchable=batchable)
+        return self._send_and_recv(uu, vv, v, message_func, reduce_func,
+                                   apply_node_func=apply_node_func,
+                                   batchable=batchable, writeback=writeback)
 
     def push(self,
              u,
