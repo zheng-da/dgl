@@ -39,7 +39,7 @@ class SSE(gluon.Block):
         super(SSE, self).__init__()
         self.g = g
         self.g.set_n_repr({'in': features,
-                           'h': mx.nd.random.normal(shape=(g.number_of_nodes(), n_hidden))})
+                           'h': mx.nd.random.normal(shape=(g.number_of_nodes(), n_hidden), ctx=features.context)})
         self.layer = NodeUpdateModule(n_hidden, activation)
 
     def forward(self, vertices):
