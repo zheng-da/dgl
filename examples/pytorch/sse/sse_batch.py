@@ -64,7 +64,7 @@ def main(args):
     n_classes = data.num_labels
     n_edges = data.graph.number_of_edges()
 
-    if args.gpu <= 0:
+    if args.gpu < 0:
         cuda = False
     else:
         cuda = True
@@ -108,7 +108,7 @@ def main(args):
             loss.backward()
             optimizer.step()
 
-            tot_loss += loss.detach().numpy()
+            tot_loss += loss.item()
 
             g.set_n_repr(logits, data, inplace=True)
 
