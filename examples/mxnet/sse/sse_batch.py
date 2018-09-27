@@ -78,7 +78,11 @@ def main(args):
     model.initialize(ctx=ctx)
 
     # use optimizer
-    trainer = gluon.Trainer(model.collect_params(), 'adam', {'learning_rate': args.lr * 10})
+    num_batches = int(g.number_of_nodes() / args.batch_size)
+    scheduler = mx.lr_scheduler.CosineScheduler(args.n_epochs * num_batches, args.lr * 10,
+            args.lr / args.n_epochs, 0, args.lr/5)
+    trainer = gluon.Trainer(model.collect_params(), 'adam', {'learning_rate': args.lr,
+        'lr_scheduler': scheduler})
 
     # initialize graph
     dur = []
@@ -86,8 +90,6 @@ def main(args):
         t0 = time.time()
         randv = np.random.permutation(g.number_of_nodes())
         rand_labels = labels[randv]
-        if epoch > args.warmup:
-            trainer = gluon.Trainer(model.collect_params(), 'adam', {'learning_rate': args.lr})
         data_iter = mx.io.NDArrayIter(data=mx.nd.array(randv, dtype='int32'), label=rand_labels,
                                       batch_size=args.batch_size)
         tot_loss = 0
