@@ -19,34 +19,52 @@ def gcn_msg(src, edge):
 def gcn_reduce(node, msgs):
     return {'accum': mx.nd.sum(msgs, 1)}
 
-class NodeUpdateModule(gluon.Block):
-    def __init__(self, out_feats, activation=None):
-        super(NodeUpdateModule, self).__init__()
+class NodeUpdate(gluon.Block):
+    def __init__(self, out_feats, activation=None, alpha=0.9):
+        super(NodeUpdate, self).__init__()
         self.linear1 = gluon.nn.Dense(out_feats, activation=activation)
         # TODO what is the dimension here?
         self.linear2 = gluon.nn.Dense(out_feats)
+        self.alpha = alpha
 
     def forward(self, node):
-        node = mx.nd.concat(node['in'], node['accum'], dim=1)
-        return self.linear2(self.linear1(node))
+        tmp = mx.nd.concat(node['in'], node['accum'], dim=1)
+        hidden = self.linear2(self.linear1(tmp))
+        return node['h'] * (1 - self.alpha) + self.alpha * hidden
 
-class SSE(gluon.Block):
+class SSEUpdateHidden(gluon.Block):
     def __init__(self,
                  g,
                  features,
                  n_hidden,
                  activation):
-        super(SSE, self).__init__()
+        super(SSEUpdateHidden, self).__init__()
         self.g = g
         self.g.set_n_repr({'in': features,
                            'h': mx.nd.random.normal(shape=(g.number_of_nodes(), n_hidden), ctx=features.context)})
-        self.layer = NodeUpdateModule(n_hidden, activation)
+        self.layer = NodeUpdate(n_hidden, activation)
 
     def forward(self, vertices):
-        # TODO we should support NDArray for vertex IDs.
-        vs = vertices.asnumpy()
-        return self.g.pull(vs, gcn_msg, gcn_reduce, self.layer,
-                           batchable=True, writeback=False)
+        if vertices is None:
+            self.g.update_all(gcn_msg, gcn_reduce, self.layer,
+                    batchable=True)
+            return self.g.get_n_repr()
+        else:
+            # TODO we should support NDArray for vertex IDs.
+            vs = vertices.asnumpy()
+            return self.g.pull(vs, gcn_msg, gcn_reduce, self.layer,
+                    batchable=True, writeback=False)
+
+class SSEPredict(gluon.Block):
+    def __init__(self, update_hidden, out_feats):
+        super(SSEPredict, self).__init__()
+        self.linear1 = gluon.nn.Dense(out_feats, activation='relu')
+        self.linear2 = gluon.nn.Dense(out_feats)
+        self.update_hidden = update_hidden
+
+    def forward(self, vertices):
+        hidden = self.update_hidden(vertices)
+        return self.linear2(self.linear1(hidden))
 
 def main(args):
     # load and preprocess dataset
@@ -71,22 +89,23 @@ def main(args):
 
     # create the SSE model
     g = DGLGraph(data.graph)
-    model = SSE(g,
-                features,
-                args.n_hidden,
-                'relu')
+    update_hidden = SSEUpdateHidden(g, features, args.n_hidden, 'relu')
+    model = SSEPredict(update_hidden, args.n_hidden)
     model.initialize(ctx=ctx)
 
     # use optimizer
     num_batches = int(g.number_of_nodes() / args.batch_size)
-    scheduler = mx.lr_scheduler.CosineScheduler(args.n_epochs * num_batches, args.lr * 10,
-            args.lr / args.n_epochs, 0, args.lr/5)
+    scheduler = mx.lr_scheduler.CosineScheduler(args.n_epochs * num_batches,
+            args.lr * 10, 0, 0, args.lr/5)
     trainer = gluon.Trainer(model.collect_params(), 'adam', {'learning_rate': args.lr,
         'lr_scheduler': scheduler})
 
     # initialize graph
     dur = []
     for epoch in range(args.n_epochs):
+        # compute vertex embedding.
+        update_hidden(None)
+
         t0 = time.time()
         randv = np.random.permutation(g.number_of_nodes())
         rand_labels = labels[randv]
