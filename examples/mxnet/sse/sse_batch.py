@@ -50,9 +50,7 @@ class SSEUpdateHidden(gluon.Block):
                     batchable=True)
             return self.g.get_n_repr()
         else:
-            # TODO we should support NDArray for vertex IDs.
-            vs = vertices.asnumpy()
-            return self.g.pull(vs, gcn_msg, gcn_reduce, self.layer,
+            return self.g.pull(vertices, gcn_msg, gcn_reduce, self.layer,
                     batchable=True, writeback=False)
 
 class SSEPredict(gluon.Block):
@@ -72,7 +70,10 @@ def main(args):
 
     features = mx.nd.array(data.features)
     labels = mx.nd.array(data.labels)
-    mask = mx.nd.array(data.train_mask)
+    train_vs = np.nonzero(data.train_mask)[0]
+    eval_vs = np.nonzero(data.train_mask == 0)[0]
+    train_labels = mx.nd.array(data.labels[train_vs])
+    eval_labels = mx.nd.array(data.labels[eval_vs])
     in_feats = features.shape[1]
     n_classes = data.num_labels
     n_edges = data.graph.number_of_edges()
@@ -83,8 +84,8 @@ def main(args):
     else:
         cuda = True
         features = features.as_in_context(mx.gpu(0))
-        labels = labels.as_in_context(mx.gpu(0))
-        mask = mask.as_in_context(mx.gpu(0))
+        train_labels = train_labels.as_in_context(mx.gpu(0))
+        eval_labels = eval_labels.as_in_context(mx.gpu(0))
         ctx = mx.gpu(0)
 
     # create the SSE model
@@ -107,11 +108,12 @@ def main(args):
         update_hidden(None)
 
         t0 = time.time()
-        randv = np.random.permutation(g.number_of_nodes())
-        rand_labels = labels[randv]
+        permute = np.random.permutation(len(train_vs))
+        randv = train_vs[permute]
+        rand_labels = train_labels[permute]
         data_iter = mx.io.NDArrayIter(data=mx.nd.array(randv, dtype='int32'), label=rand_labels,
                                       batch_size=args.batch_size)
-        tot_loss = 0
+        train_loss = 0
         for batch in data_iter:
             # TODO this isn't exactly how the model is trained.
             # We should enable the semi-supervised training.
@@ -120,13 +122,17 @@ def main(args):
                 loss = mx.nd.softmax_cross_entropy(logits, batch.label[0])
             loss.backward()
             trainer.step(batch.data[0].shape[0])
-            tot_loss += loss.asnumpy()[0]
+            train_loss += loss.asnumpy()[0]
+
+        logits = model(eval_vs)
+        eval_loss = mx.nd.softmax_cross_entropy(logits, eval_labels)
+        eval_loss = eval_loss.asnumpy()[0]
 
             g.set_n_repr(logits, batch.data[0], inplace=True)
 
         dur.append(time.time() - t0)
-        print("Epoch {:05d} | Loss {:.4f} | Time(s) {:.4f} | ETputs(KTEPS) {:.2f}".format(
-            epoch, tot_loss, np.mean(dur), n_edges / np.mean(dur) / 1000))
+        print("Epoch {:05d} | Train Loss {:.4f} | Eval Loss {:.4f} | Time(s) {:.4f} | ETputs(KTEPS) {:.2f}".format(
+            epoch, train_loss, eval_loss, np.mean(dur), n_edges / np.mean(dur) / 1000))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GCN')
