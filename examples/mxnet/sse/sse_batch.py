@@ -37,31 +37,41 @@ class SSEUpdateHidden(gluon.Block):
                  g,
                  features,
                  n_hidden,
-                 activation):
+                 activation,
+                 dropout):
         super(SSEUpdateHidden, self).__init__()
         self.g = g
         self.g.set_n_repr({'in': features,
                            'h': mx.nd.random.normal(shape=(g.number_of_nodes(), n_hidden), ctx=features.context)})
         self.layer = NodeUpdate(n_hidden, activation)
+        self.dropout = dropout
 
     def forward(self, vertices):
         if vertices is None:
             self.g.update_all(gcn_msg, gcn_reduce, self.layer,
                     batchable=True)
-            return self.g.get_n_repr()
+            return self.g.get_n_repr()[dgl.__REPR__]
         else:
+            # We don't need dropout for inference.
+            if self.dropout:
+                # TODO here we apply dropout on all vertex representation.
+                val = mx.nd.Dropout(self.g.get_n_repr()[dgl.__REPR__], p=self.dropout)
+                self.g.set_n_repr(val)
             return self.g.pull(vertices, gcn_msg, gcn_reduce, self.layer,
                     batchable=True, writeback=False)
 
 class SSEPredict(gluon.Block):
-    def __init__(self, update_hidden, out_feats):
+    def __init__(self, update_hidden, out_feats, dropout):
         super(SSEPredict, self).__init__()
         self.linear1 = gluon.nn.Dense(out_feats, activation='relu')
         self.linear2 = gluon.nn.Dense(out_feats)
         self.update_hidden = update_hidden
+        self.dropout = dropout
 
     def forward(self, vertices):
         hidden = self.update_hidden(vertices)
+        if self.dropout:
+            hidden = mx.nd.Dropout(hidden, p=self.dropout)
         return self.linear2(self.linear1(hidden))
 
 def main(args):
@@ -70,8 +80,11 @@ def main(args):
 
     features = mx.nd.array(data.features)
     labels = mx.nd.array(data.labels)
-    train_vs = np.nonzero(data.train_mask)[0]
-    eval_vs = np.nonzero(data.train_mask == 0)[0]
+    train_size = len(labels) * args.train_percent
+    train_vs = np.arange(train_size, dtype='int32')
+    eval_vs = np.arange(train_size, len(labels), dtype='int32')
+    print("train size: " + str(len(train_vs)))
+    print("eval size: " + str(len(eval_vs)))
     train_labels = mx.nd.array(data.labels[train_vs])
     eval_labels = mx.nd.array(data.labels[eval_vs])
     in_feats = features.shape[1]
@@ -90,8 +103,8 @@ def main(args):
 
     # create the SSE model
     g = DGLGraph(data.graph)
-    update_hidden = SSEUpdateHidden(g, features, args.n_hidden, 'relu')
-    model = SSEPredict(update_hidden, args.n_hidden)
+    update_hidden = SSEUpdateHidden(g, features, args.n_hidden, 'relu', args.update_dropout)
+    model = SSEPredict(update_hidden, args.n_hidden, args.predict_dropout)
     model.initialize(ctx=ctx)
 
     # use optimizer
@@ -149,6 +162,12 @@ if __name__ == '__main__':
             help="number of hidden gcn units")
     parser.add_argument("--warmup", type=int, default=10,
             help="number of iterations to warm up with large learning rate")
+    parser.add_argument("--update-dropout", type=float, default=0.5,
+            help="the dropout rate for updating vertex embedding")
+    parser.add_argument("--predict-dropout", type=float, default=0.5,
+            help="the dropout rate for prediction")
+    parser.add_argument("--train_percent", type=float, default=0.5,
+            help="the percentage of data used for training")
     args = parser.parse_args()
 
     main(args)
