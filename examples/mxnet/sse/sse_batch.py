@@ -47,14 +47,18 @@ class SSEUpdateHidden(gluon.Block):
         self.dropout = dropout
 
     def forward(self, vertices):
+        if vertices is None:
+            self.g.update_all(gcn_msg, gcn_reduce, self.layer, batchable=True)
+            return self.g.get_n_repr()[dgl.__REPR__]
+        else:
+            if not isinstance(vertices, np.ndarray):
+                vertices = vertices.asnumpy()
             # We don't need dropout for inference.
             if self.dropout:
                 # TODO here we apply dropout on all vertex representation.
                 val = mx.nd.Dropout(self.g.get_n_repr()[dgl.__REPR__], p=self.dropout)
                 self.g.set_n_repr(val)
-            self.g.update_all(gcn_msg, gcn_reduce, self.layer,
-                    batchable=True)
-            return self.g.get_n_repr()[dgl.__REPR__]
+            return self.g.pull(vertices, gcn_msg, gcn_reduce, self.layer, batchable=True, writeback=False)
 
 class SSEPredict(gluon.Block):
     def __init__(self, update_hidden, out_feats, dropout):
@@ -77,8 +81,8 @@ def main(args):
     features = mx.nd.array(data.features)
     labels = mx.nd.array(data.labels)
     train_size = len(labels) * args.train_percent
-    train_vs = np.arange(train_size, dtype='int32')
-    eval_vs = np.arange(train_size, len(labels), dtype='int32')
+    train_vs = np.arange(train_size, dtype='int64')
+    eval_vs = np.arange(train_size, len(labels), dtype='int64')
     print("train size: " + str(len(train_vs)))
     print("eval size: " + str(len(eval_vs)))
     train_labels = mx.nd.array(data.labels[train_vs])
@@ -120,7 +124,7 @@ def main(args):
         permute = np.random.permutation(len(train_vs))
         randv = train_vs[permute]
         rand_labels = train_labels[permute]
-        data_iter = mx.io.NDArrayIter(data=mx.nd.array(randv, dtype='int32'), label=rand_labels,
+        data_iter = mx.io.NDArrayIter(data=mx.nd.array(randv, dtype='int64'), label=rand_labels,
                                       batch_size=args.batch_size)
         train_loss = 0
         for batch in data_iter:
@@ -136,8 +140,6 @@ def main(args):
         logits = model(eval_vs)
         eval_loss = mx.nd.softmax_cross_entropy(logits, eval_labels)
         eval_loss = eval_loss.asnumpy()[0]
-
-            g.set_n_repr(logits, batch.data[0], inplace=True)
 
         dur.append(time.time() - t0)
         print("Epoch {:05d} | Train Loss {:.4f} | Eval Loss {:.4f} | Time(s) {:.4f} | ETputs(KTEPS) {:.2f}".format(
