@@ -47,18 +47,14 @@ class SSEUpdateHidden(gluon.Block):
         self.dropout = dropout
 
     def forward(self, vertices):
-        if vertices is None:
-            self.g.update_all(gcn_msg, gcn_reduce, self.layer,
-                    batchable=True)
-            return self.g.get_n_repr()[dgl.__REPR__]
-        else:
             # We don't need dropout for inference.
             if self.dropout:
                 # TODO here we apply dropout on all vertex representation.
                 val = mx.nd.Dropout(self.g.get_n_repr()[dgl.__REPR__], p=self.dropout)
                 self.g.set_n_repr(val)
-            return self.g.pull(vertices, gcn_msg, gcn_reduce, self.layer,
-                    batchable=True, writeback=False)
+            self.g.update_all(gcn_msg, gcn_reduce, self.layer,
+                    batchable=True)
+            return self.g.get_n_repr()[dgl.__REPR__]
 
 class SSEPredict(gluon.Block):
     def __init__(self, update_hidden, out_feats, dropout):
