@@ -4,6 +4,7 @@ import numpy as np
 import mxnet as mx
 import mxnet.ndarray as F
 import scipy.sparse
+import ctypes
 
 from .._ffi.base import _LIB, check_call, c_array
 from .._ffi.runtime_ctypes import TVMType, TVMContext, TVMArray
@@ -102,3 +103,17 @@ def get_context(x):
 
 def _typestr(arr_dtype):
     return arr_dtype
+
+def astvmarray(arr_data):
+    """Return a TVMArray representation of the underlying data."""
+    data = arr_data
+    #assert data.is_contiguous()
+    arr = TVMArray()
+    shape = c_array(tvm_shape_index_t, tuple(data.shape))
+    arr.data = ctypes.cast(data.data_ptr(), ctypes.c_void_p)
+    arr.shape = shape
+    arr.strides = None
+    arr.dtype = TVMType(_typestr(data.dtype))
+    arr.ndim = len(shape)
+    arr.ctx = get_context(data)
+    return arr
