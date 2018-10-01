@@ -8,21 +8,20 @@ import scipy.sparse
 from .._ffi.base import _LIB, check_call, c_array
 from .._ffi.runtime_ctypes import TVMType, TVMContext, TVMArray
 from .._ffi.runtime_ctypes import TypeCode, tvm_shape_index_t
-from .. import ndarray as nd
 
 # Tensor types
 Tensor = mx.nd.NDArray
 SparseTensor = mx.nd.sparse.CSRNDArray
 
 # Data types
-float16 = 'float16'
-float32 = 'float32'
-float64 = 'float64'
-uint8 = 'uint8'
-int8 = 'int8'
-int16 = 'int16'
-int32 = 'int32'
-int64 = 'int64'
+float16 = np.float16
+float32 = np.float32
+float64 = np.float64
+uint8 = np.uint8
+int8 = np.int8
+int16 = np.int16
+int32 = np.int32
+int64 = np.int64
 
 # Operators
 tensor = mx.nd.array
@@ -36,6 +35,9 @@ def astype(a, ty):
 def asnumpy(a):
     return a.asnumpy()
 
+def from_numpy(np_data):
+    return mx.nd.array(np_data)
+
 def pack(tensors):
     return F.concat(*tensors, dim=0)
 
@@ -45,6 +47,9 @@ def unpack(x, indices_or_sections=1):
 # TODO this doesn't exist for symbol.
 def shape(x):
     return x.shape
+
+def dtype(x):
+    return x.dtype
 
 def isinteger(x):
     return x.dtype in [np.int, np.int8, np.int16, np.int32, np.int64]
@@ -75,7 +80,7 @@ def sort(x, dim=None, descending=False):
     # TODO this isn't an ideal implementation.
     val = F.sort(x, axis=dim, is_ascend=ascend)
     idx = F.argsort(x, axis=dim, is_ascend=ascend)
-    idx = F.cast(idx, dtype='int32')
+    idx = F.cast(idx, dtype='int64')
     return val, idx
 
 def to_context(x, ctx):
