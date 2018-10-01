@@ -4,7 +4,11 @@ import numpy as np
 import mxnet as mx
 import mxnet.ndarray as F
 import scipy.sparse
-import dgl.context as context
+
+from .._ffi.base import _LIB, check_call, c_array
+from .._ffi.runtime_ctypes import TVMType, TVMContext, TVMArray
+from .._ffi.runtime_ctypes import TypeCode, tvm_shape_index_t
+from .. import ndarray as nd
 
 # Tensor types
 Tensor = mx.nd.NDArray
@@ -77,11 +81,19 @@ def sort(x, dim=None, descending=False):
 def to_context(x, ctx):
     if ctx is None:
         return x
+    elif ctx.device_type == TVMContext.STR2MASK['cuda']:
+        return x.as_in_context(mx.gpu(ctx.device_id))
+    elif ctx.device_type == TVMContext.STR2MASK['cpu']:
+        return x.as_in_context(mx.cpu())
     else:
-        return x.as_in_context(ctx)
+        raise RuntimeError('Invalid context', ctx)
 
 def get_context(x):
     if x.context.device_type == 'cpu':
-        return mx.context.cpu()
+        return TVMContext(TVMContext.STR2MASK['cpu'], 0)
     else:
-        return mx.context.gpu(x.context.device_id)
+        return TVMContext(
+                TVMContext.STR2MASK[x.context.device_type], x.context.device_id)
+
+def _typestr(arr_dtype):
+    return arr_dtype
