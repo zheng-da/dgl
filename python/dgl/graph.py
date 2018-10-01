@@ -1125,7 +1125,6 @@ class DGLGraph(object):
             # no edges to be triggered
             assert len(v) == 0
             return
-        unique_v = utils.toindex(unique_v.totensor())
 
         # TODO(minjie): better way to figure out `batchable` flag
         if message_func == "default":
@@ -1179,7 +1178,7 @@ class DGLGraph(object):
             # no edges to be triggered
             assert len(v) == 0
             return
-        unique_v = F.unique(v.totensor())
+        unique_v = F.unique(v)
         _send_and_recv(u, v, unique_v,
                       message_func, reduce_func, apply_node_func,
                       batchable)
