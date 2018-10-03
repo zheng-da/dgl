@@ -107,7 +107,6 @@ def _typestr(arr_dtype):
 def astvmarray(arr_data):
     """Return a TVMArray representation of the underlying data."""
     data = arr_data
-    #assert data.is_contiguous()
     arr = TVMArray()
     shape = c_array(tvm_shape_index_t, tuple(data.shape))
     arr.data = ctypes.cast(data.data_ptr(), ctypes.c_void_p)
@@ -117,3 +116,109 @@ def astvmarray(arr_data):
     arr.ndim = len(shape)
     arr.ctx = get_context(data)
     return arr
+
+from mxnet.symbol.contrib import _cut_subgraph, _get_unique_subgraph_name, _get_graph_inputs
+from mxnet.attribute import AttrScope
+from mxnet.base import _as_list
+
+def _create_prefix(prefix, name):
+    return prefix + "_" + name + "_"
+
+def _get_prefix(sym_name, gname):
+    splits = sym_name.split(gname)
+    if len(splits) == 1:
+        return None
+    else:
+        return splits[0] + gname + "_"
+
+def _remove_prefix(sym_name, gname):
+    splits = sym_name.split(gname + "_")
+    if len(splits) == 1:
+        return sym_name
+    else:
+        return splits[1]
+
+def _construct_subgraph(sym_out, name):
+    if isinstance(sym_out, dict):
+        sym_out = [sym_out[key] for key in sym_out]
+    else:
+        sym_out = _as_list(sym_out)
+    g = mx.sym.Group(sym_out)
+
+    flat_out = []
+    all_input_names = g.list_inputs()
+    output_names = {o.name for o in sym_out}
+    for o in sym_out:
+        if o.name in all_input_names or o.list_attr().get("__subgraph_name__", "") != name:
+            flat_out.append(mx.sym.op.identity(o))
+        else:
+            flat_out.append(o)
+    return mx.sym.Group(flat_out)
+
+def _add_inputs(g, inputs, vertex_frame, edge_frame, name):
+    cut_syms = _cut_subgraph(g)
+    input_syms = _get_graph_inputs(g)
+    cut_sym_map = {sym.list_outputs()[0]:sym for sym in cut_syms}
+    in_sym_map = {sym.list_outputs()[0]:sym for sym in input_syms}
+    index = []
+    src_prefix = _create_prefix("src", name)
+    dst_prefix = _create_prefix("dst", name)
+    edge_prefix = _create_prefix("edge", name)
+    for in1 in _get_graph_inputs(g):
+        if _get_prefix(in1.name, name) in [src_prefix, dst_prefix]:
+            inputs.append(vertex_frame[_remove_prefix(in1.name, name)])
+        elif _get_prefix(in1.name, name) == edge_prefix:
+            inputs.append(edge_frame[_remove_prefix(in1.name, name)])
+        elif in1.name in cut_sym_map.keys():
+            inputs.append(cut_sym_map[in1.name])
+        else:
+            inputs.append(in_sym_map[in1.name])
+        index.append(len(inputs) - 1)
+    return index
+
+def _send_and_recv(uid, vid, eid, recv_vid,
+                   vertex_frame, edge_frame,
+                   message_func, reduce_func, apply_node_func,
+                   name="sr"):
+    # We need to construct symbols required by all of the functions.
+    src_syms = {}
+    dst_syms = {}
+    edge_syms = {}
+
+    name = _get_unique_subgraph_name(name)
+    with AttrScope(__subgraph_name__=name):
+        for key in vertex_frame:
+            src_syms[key] = mx.sym.var(_create_prefix("src", name) + key)
+            dst_syms[key] = mx.sym.var(_create_prefix("dst", name) + key)
+        for key in edge_frame:
+            edge_syms[key] = mx.sym.var(_create_prefix("edge", name) + key)
+        # TODO we need to add destination variables.
+        msg_syms = message_func(src_syms, edge_syms)
+        msg_g = _construct_subgraph(msg_syms, name)
+
+        red_node_syms = {}
+        for key in vertex_frame:
+            red_node_syms[key] = mx.sym.var(_create_prefix("node", name) + key)
+        red_syms = reduce_func(red_node_syms, msg_syms)
+        red_g = _construct_subgraph(red_syms, name)
+
+        update_node_syms = {}
+        for key in vertex_frame:
+            update_node_syms[key] = mx.sym.var(_create_prefix("node", name) + key)
+        update_node_syms.update(red_syms)
+        # TODO how to pass a dict to a hybrid forward?
+        update_syms = apply_node_func(update_node_syms['accum'])
+        update_g = _construct_subgraph(update_syms, name)
+
+    inputs = []
+    inputs.append(uid)
+    inputs.append(vid)
+    inputs.append(eid)
+    inputs.append(recv_vid)
+
+    msg_index = _add_inputs(msg_g, inputs, vertex_frame, edge_frame, name)
+    red_index = _add_inputs(red_g, inputs, vertex_frame, edge_frame, name)
+    update_index = _add_inputs(update_g, inputs, vertex_frame, edge_frame, name)
+
+    ret = mx.sym._internal._dgl_send_and_recv(msg_g, red_g, update_g, inputs, msg_index=msg_index,
+                                              red_index=red_index, update_index=update_index)
