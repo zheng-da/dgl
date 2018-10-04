@@ -155,7 +155,8 @@ def _construct_subgraph(sym_out, name):
             flat_out.append(o)
     return mx.sym.Group(flat_out)
 
-def _add_inputs(g, inputs, vertex_frame, edge_frame, name):
+# In this case, all inputs are from external sources.
+def _add_msg_inputs(g, inputs, vertex_frame, edge_frame, name):
     cut_syms = _cut_subgraph(g)
     input_syms = _get_graph_inputs(g)
     cut_sym_map = {sym.list_outputs()[0]:sym for sym in cut_syms}
@@ -176,35 +177,59 @@ def _add_inputs(g, inputs, vertex_frame, edge_frame, name):
         index.append(len(inputs) - 1)
     return index
 
+# In this case, some inputs are from external sources and some inputs
+# are the output of the previous function.
+def _add_inputs(g, inputs, vertex_frame, prev_out_syms, name):
+    cut_syms = _cut_subgraph(g)
+    input_syms = _get_graph_inputs(g)
+    cut_sym_map = {sym.list_outputs()[0]:sym for sym in cut_syms}
+    prev_out_map = {sym.list_outputs()[0]:sym for sym in prev_out_syms}
+    in_sym_map = {sym.list_outputs()[0]:sym for sym in input_syms}
+    orig_input_index = []
+    prev_out_index = []
+    for in1 in _get_graph_inputs(g):
+        if in1.name in prev_out_map.keys():
+            prev_out_index.append(len(inputs) - 1)
+        elif in1.name in vertex_frame.keys():
+            inputs.append(vertex_frame[in1.name])
+            orig_input_index.append(len(inputs) - 1)
+        elif in1.name in cut_sym_map.keys():
+            inputs.append(cut_sym_map[in1.name])
+            orig_input_index.append(len(inputs) - 1)
+        else:
+            inputs.append(in_sym_map[in1.name])
+            orig_input_index.append(len(inputs) - 1)
+    assert len(prev_out_index) == len(prev_out_syms)
+    return orig_input_index, prev_out_index
+
+def _get_list(syms):
+    if isinstance(syms, mx.sym.Symbol):
+        return [syms]
+    elif isinstance(syms, dict):
+        return [syms[key] for key in syms]
+    else:
+        return syms
+
 def _send_and_recv(uid, vid, eid, recv_vid,
                    vertex_frame, edge_frame,
                    message_func, reduce_func, apply_node_func,
                    name="sr"):
     # We need to construct symbols required by all of the functions.
-    src_syms = {}
-    dst_syms = {}
-    edge_syms = {}
-
     name = _get_unique_subgraph_name(name)
     with AttrScope(__subgraph_name__=name):
-        for key in vertex_frame:
-            src_syms[key] = mx.sym.var(_create_prefix("src", name) + key)
-            dst_syms[key] = mx.sym.var(_create_prefix("dst", name) + key)
-        for key in edge_frame:
-            edge_syms[key] = mx.sym.var(_create_prefix("edge", name) + key)
         # TODO we need to add destination variables.
-        msg_syms = message_func(src_syms, edge_syms)
+        msg_syms = message_func(vertex_frame, edge_frame)
         msg_g = _construct_subgraph(msg_syms, name)
 
         red_node_syms = {}
         for key in vertex_frame:
-            red_node_syms[key] = mx.sym.var(_create_prefix("node", name) + key)
+            red_node_syms[key] = mx.sym.var(key)
         red_syms = reduce_func(red_node_syms, msg_syms)
         red_g = _construct_subgraph(red_syms, name)
 
         update_node_syms = {}
         for key in vertex_frame:
-            update_node_syms[key] = mx.sym.var(_create_prefix("node", name) + key)
+            update_node_syms[key] = mx.sym.var(key)
         update_node_syms.update(red_syms)
         # TODO how to pass a dict to a hybrid forward?
         update_syms = apply_node_func(update_node_syms['accum'])
@@ -216,9 +241,10 @@ def _send_and_recv(uid, vid, eid, recv_vid,
     inputs.append(eid)
     inputs.append(recv_vid)
 
-    msg_index = _add_inputs(msg_g, inputs, vertex_frame, edge_frame, name)
-    red_index = _add_inputs(red_g, inputs, vertex_frame, edge_frame, name)
-    update_index = _add_inputs(update_g, inputs, vertex_frame, edge_frame, name)
+    msg_index = _add_msg_inputs(msg_g, inputs, vertex_frame, edge_frame, name)
+    red_index, from_msg_index = _add_inputs(red_g, inputs, vertex_frame, _get_list(msg_syms), name)
+    update_index, from_red_index = _add_inputs(update_g, inputs, vertex_frame, _get_list(red_syms), name)
 
     ret = mx.sym._internal._dgl_send_and_recv(msg_g, red_g, update_g, inputs, msg_index=msg_index,
-                                              red_index=red_index, update_index=update_index)
+                                              red_index=red_index, from_msg_index=from_msg_index,
+                                              update_index=update_index, from_red_index=from_red_index)
