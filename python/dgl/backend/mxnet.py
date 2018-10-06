@@ -179,28 +179,34 @@ def _add_msg_inputs(g, inputs, vertex_frame, edge_frame, name):
 
 # In this case, some inputs are from external sources and some inputs
 # are the output of the previous function.
-def _add_inputs(g, inputs, vertex_frame, prev_out_syms, name):
+def _add_inputs(g, inputs, vertex_frame, prev_out_syms, exclude_syms, name):
     cut_syms = _cut_subgraph(g)
     input_syms = _get_graph_inputs(g)
     cut_sym_map = {sym.list_outputs()[0]:sym for sym in cut_syms}
     prev_out_map = {sym.list_outputs()[0]:sym for sym in prev_out_syms}
     in_sym_map = {sym.list_outputs()[0]:sym for sym in input_syms}
-    orig_input_index = []
-    prev_out_index = []
+    exclude_sym_map = {sym.list_outputs()[0]:sym for sym in exclude_syms}
+    index = []
+
+    def _get_index(syms, name):
+        for i, sym in enumerate(syms):
+            if sym.name == name:
+                return i
+        return -1
+
     for in1 in _get_graph_inputs(g):
         if in1.name in prev_out_map.keys():
-            prev_out_index.append(len(inputs) - 1)
+            index.append((_get_index(prev_out_syms, in1.name), False))
         elif in1.name in vertex_frame.keys():
             inputs.append(vertex_frame[in1.name])
-            orig_input_index.append(len(inputs) - 1)
+            index.append((len(inputs) - 1, True))
         elif in1.name in cut_sym_map.keys():
             inputs.append(cut_sym_map[in1.name])
-            orig_input_index.append(len(inputs) - 1)
-        else:
+            index.append((len(inputs) - 1, True))
+        elif in1.name not in exclude_sym_map.keys():
             inputs.append(in_sym_map[in1.name])
-            orig_input_index.append(len(inputs) - 1)
-    assert len(prev_out_index) == len(prev_out_syms)
-    return orig_input_index, prev_out_index
+            index.append((len(inputs) - 1, True))
+    return index
 
 def _get_list(syms):
     if isinstance(syms, mx.sym.Symbol):
@@ -224,12 +230,37 @@ def _send_and_recv(uid, vid, eid, recv_vid,
         red_node_syms = {}
         for key in vertex_frame:
             red_node_syms[key] = mx.sym.var(key)
-        red_syms = reduce_func(red_node_syms, msg_syms)
+        # We need to construct a message array sliced from the output of the message function.
+        msg_idx = mx.sym.var('msg_idx')
+        exclude_red_syms = [msg_idx]
+        if isinstance(msg_syms, dict):
+            # We should create new symbols for the outputs of the message function.
+            msg_syms = {key:mx.sym.var(msg_syms[key].name) for key in msg_syms}
+            sliced_msg_syms = {key:mx.sym.take(msg_syms[key], msg_idx) for key in msg_syms}
+            # We also need to make sure the sliced messages have the expected shape.
+            # Since we don't support the shape symbol, we can use the 'dummy_msgs' to control
+            # the shape of the message array.
+            dummy_msg_syms = {key:mx.sym.var('dummy_msgs_' + msg_syms[key].name) for key in msg_syms}
+            reshaped_msg_syms = {key:mx.sym.reshape_like(sliced_msg_syms[key], dummy_msg_syms[key]) for key in msg_syms}
+            exclude_red_syms += dummy_msg_syms.values()
+        else:
+            msg_syms = mx.sym.var(msg_syms.name)
+            sliced_msg_syms = mx.sym.take(msg_syms, msg_idx)
+            # We also need to make sure the sliced messages have the expected shape.
+            # Since we don't support the shape symbol, we can use the 'dummy_msgs' to control
+            # the shape of the message array.
+            dummy_msg_syms = mx.sym.var('dummy_msgs_' + msg_syms.name)
+            reshaped_msg_syms = mx.sym.reshape_like(sliced_msg_syms, dummy_msg_syms)
+            exclude_red_syms.append(dummy_msg_syms)
+        red_syms = reduce_func(red_node_syms, reshaped_msg_syms)
         red_g = _construct_subgraph(red_syms, name)
 
-        update_node_syms = {}
-        for key in vertex_frame:
-            update_node_syms[key] = mx.sym.var(key)
+        # construct the symbols for the outputs of the reduce function.
+        if isinstance(red_syms, dict):
+            red_syms = {key:mx.sym.var(red_syms[key].name) for key in red_syms}
+        else:
+            red_syms = mx.sym.var(red_syms[key].name)
+        update_node_syms = {key:mx.sym.var(key) for key in vertex_frame}
         update_node_syms.update(red_syms)
         # TODO how to pass a dict to a hybrid forward?
         update_syms = apply_node_func(update_node_syms['accum'])
@@ -242,9 +273,20 @@ def _send_and_recv(uid, vid, eid, recv_vid,
     inputs.append(recv_vid)
 
     msg_index = _add_msg_inputs(msg_g, inputs, vertex_frame, edge_frame, name)
-    red_index, from_msg_index = _add_inputs(red_g, inputs, vertex_frame, _get_list(msg_syms), name)
-    update_index, from_red_index = _add_inputs(update_g, inputs, vertex_frame, _get_list(red_syms), name)
+    red_index = _add_inputs(red_g, inputs, vertex_frame, _get_list(msg_syms), exclude_red_syms, name)
+    update_index = _add_inputs(update_g, inputs, vertex_frame, _get_list(red_syms), [], name)
+    num_msg_out = 0
+    for i in range(len(red_index)):
+        if not red_index[i][1]:
+            t = (red_index[i][0] + len(inputs), True)
+            red_index[i] = t
+            num_msg_out += 1
+    for i in range(len(update_index)):
+        if not update_index[i][1]:
+            t = (update_index[i][0] + len(inputs) + num_msg_out, True)
+            update_index[i] = t
+    red_index = [i[0] for i in red_index]
+    update_index = [i[0] for i in update_index]
 
     ret = mx.sym._internal._dgl_send_and_recv(msg_g, red_g, update_g, inputs, msg_index=msg_index,
-                                              red_index=red_index, from_msg_index=from_msg_index,
-                                              update_index=update_index, from_red_index=from_red_index)
+                                              red_index=red_index, update_index=update_index)

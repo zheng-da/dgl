@@ -12,11 +12,16 @@ vertex_frame = {'h': mx.sym.var('h'),
                 'in': mx.sym.var('in')}
 edge_frame = {}
 
-def msg_func(src, edge):
-    return src['in']
+def msg_func1(src, edge):
+    return src['in'] + 1
 
-def reduce_func(node, msgs):
+def msg_func2(src, edge):
+    return {'m': src['in'] + 1}
+
+def reduce_func1(node, msgs):
     return {'accum': mx.sym.sum(msgs, 1)}
+def reduce_func2(node, msgs):
+    return {'accum': mx.sym.sum(msgs['m'], 1)}
 
 class NodeUpdate(gluon.HybridBlock):
     def __init__(self):
@@ -28,4 +33,6 @@ class NodeUpdate(gluon.HybridBlock):
 
 update_func = NodeUpdate()
 F.mxnet._send_and_recv(uid, vid, eid, recv_vid, vertex_frame, edge_frame,
-                       msg_func, reduce_func, update_func)
+                       msg_func2, reduce_func2, update_func)
+F.mxnet._send_and_recv(uid, vid, eid, recv_vid, vertex_frame, edge_frame,
+                       msg_func1, reduce_func1, update_func)
