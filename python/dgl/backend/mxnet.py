@@ -60,8 +60,7 @@ def isinteger(x):
 def gather_row(data, row_index):
     return data[row_index,]
 
-#def scatter_row(data, row_index, value):
-#    return data.index_copy(0, row_index, value)
+scatter_row = mx.nd.contrib.index_copy
 
 def broadcast_to(x, to_array):
     return x + F.zeros_like(to_array)
@@ -278,5 +277,6 @@ def _send_and_recv(uid, vid, eid, recv_vid,
     red_index = [i[0] for i in red_index]
     update_index = [i[0] for i in update_index]
 
-    ret = mx.sym._internal._dgl_send_and_recv(msg_g, red_g, update_g, inputs, msg_index=msg_index,
-                                              red_index=red_index, update_index=update_index)
+    ret = mx.sym._internal._send_and_recv(msg_g, red_g, update_g, *inputs, msg_index=msg_index,
+                                          red_index=red_index, update_index=update_index,
+                                          num_outputs=len(update_g.list_outputs()))
