@@ -8,19 +8,65 @@ from mxnet import gluon
 import dgl
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
+from dgl.contrib import KVServer
+
 from gcn_ns_sc import gcn_ns_train
 from gcn_cv_sc import gcn_cv_train
 from graphsage_cv import graphsage_cv_train
 
+def start_server(args, client_namebook, server_namebook):
+    server = KVServer(
+            server_id=args.id,
+            client_namebook=client_namebook,
+            server_addr=server_namebook[args.id])
+
+    ndata = load_node_data(args)
+    graph_name = args.graph_name
+
+    # Initialize data on kvstore, the data_tensor is shared-memory data
+    for key, val in ndata.items():
+        data_name = graph_name + '_' + key
+        server.init_data(name=data_name, data_tensor=ndata[key])
+
+    server.start()
+
+    exit()  # exit program directly when finishing training
+
+def connect_to_kvstore(args, client_namebook, server_namebook):
+    client = dgl.contrib.KVClient(
+        client_id=args.id,
+        server_namebook=server_namebook,
+        client_addr=client_namebook[args.id])
+
+    client.connect()
+
+    return client
+
+def load_local_part(args):
+    # We need to know:
+    # * local nodes and local edges.
+    # * mapping to global nodes and global edges.
+    # * mapping to the right machine.
+    # * nodes that belong to the local partition.
+    # TODO for now, I'll use csv to store the partitioned graph.
+    import pandas as pd
+    name = args.graph_name + '_' + args.part_id
+    data = pd.read_csv(name)
+    #TODO
+    pass
+
+def get_from_kvstore(args, kv, g, name):
+    name = args.graph_name + "_" + name
+    return kv.pull(name=name, id_tensor=g.ndata['global_id'])
+
 def main(args):
-    g = dgl.contrib.graph_store.create_graph_from_store(args.graph_name, "shared_mem")
+    kv = connect_to_kvstore(args.addr, args.graph_name)
+    g = load_local_part(args.graph_name, part_id)
     # We need to set random seed here. Otherwise, all processes have the same mini-batches.
     mx.random.seed(g.worker_id)
-    features = g.nodes[:].data['features']
-    labels = g.nodes[:].data['labels']
-    train_mask = g.nodes[:].data['train_mask']
-    val_mask = g.nodes[:].data['val_mask']
-    test_mask = g.nodes[:].data['test_mask']
+    train_mask = get_from_kvstore(kv, g, 'train_mask')
+    val_mask = get_from_kvstore(kv, g, 'val_mask')
+    test_mask = get_from_kvstore(kv, g, 'test_mask')
 
     if args.num_gpus > 0:
         ctx = mx.gpu(g.worker_id % args.num_gpus)
@@ -30,17 +76,8 @@ def main(args):
     train_nid = mx.nd.array(np.nonzero(train_mask.asnumpy())[0]).astype(np.int64)
     test_nid = mx.nd.array(np.nonzero(test_mask.asnumpy())[0]).astype(np.int64)
 
-    n_classes = len(np.unique(labels.asnumpy()))
-    n_train_samples = train_mask.sum().asscalar()
-    n_val_samples = val_mask.sum().asscalar()
-    n_test_samples = test_mask.sum().asscalar()
-
     if args.model == "gcn_ns":
-        gcn_ns_train(g, ctx, args, n_classes, train_nid, test_nid, n_test_samples)
-    elif args.model == "gcn_cv":
-        gcn_cv_train(g, ctx, args, n_classes, train_nid, test_nid, n_test_samples, True)
-    elif args.model == "graphsage_cv":
-        graphsage_cv_train(g, ctx, args, n_classes, train_nid, test_nid, n_test_samples, True)
+        gcn_ns_train(g, ctx, args, args.n_classes, train_nid, test_nid)
     else:
         print("unknown model. Please choose from gcn_ns, gcn_cv, graphsage_cv")
     print("parent ends")
@@ -81,4 +118,7 @@ if __name__ == '__main__':
 
     print(args)
 
-    main(args)
+    if args.server:
+        start_server(args)
+    else:
+        main(args)
