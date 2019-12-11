@@ -125,7 +125,7 @@ def gcn_ns_train(g, kv, ctx, args, n_classes, train_nid, test_nid):
                         prefix='GCN')
 
     model.initialize(ctx=ctx)
-    loss_fcn = gluon.loss.SoftmaxCELoss()
+    loss_fcn = gluon.loss.SigmoidBinaryCrossEntropyLoss()
 
     infer_model = GCNInfer(in_feats,
                            args.n_hidden,

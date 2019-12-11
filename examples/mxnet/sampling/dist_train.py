@@ -1,6 +1,7 @@
 from multiprocessing import Process
 import argparse, time, math
 import numpy as np
+from scipy import sparse as spsp
 import mxnet as mx
 from mxnet import gluon
 import dgl
@@ -14,10 +15,13 @@ server_namebook, client_namebook = dgl.contrib.ReadNetworkConfigure('config.txt'
 
 def load_node_data(args):
     if args.num_parts > 1:
-        import pickle
-        ndata = pickle.load(open('reddit_ndata.pkl', 'rb'))
-        print('load reddit ndata')
-        return ndata
+        all_locs = np.loadtxt('MAG0/MAG0.adj.part.{}'.format(args.num_parts))
+        fos_spm = spsp.load_npz('MAG0/MAG0_fos.npz')[all_locs == args.id]
+        titles = np.load('MAG0/MAG0_title_emb.npy')[all_locs == args.id]
+        ndata = {}
+        ndata['feature'] = mx.nd.array(titles)
+        ndata['label'] = mx.nd.array(fos_spm.todense())
+        return ndata, all_locs == args.id
     else:
         data = load_data(args)
         features = mx.nd.array(data.features)
@@ -32,18 +36,25 @@ def load_node_data(args):
                 'test_mask': test_mask}
 
 def start_server(args):
+    ndata, mask = load_node_data(args)
+    print('server {} loads data'.format(args.id))
+    part_nid = np.nonzero(mask)[0]
+    global2local = np.zeros(shape=(len(mask),), dtype=np.int64)
+    global2local[part_nid] = part_nid
+    graph_name = args.graph_name
+
+    print('try to start server', args.id)
     server = KVServer(
             server_id=args.id,
             client_namebook=client_namebook,
             server_addr=server_namebook[args.id])
-
-    ndata = load_node_data(args)
-    graph_name = args.graph_name
+    print('server {} starts'.format(args.id))
 
     # Initialize data on kvstore, the data_tensor is shared-memory data
     for key, val in ndata.items():
         data_name = graph_name + '_' + key
         print('server init {} from ndata[{}]'.format(data_name, key))
+        server.set_global_to_local(data_name, mx.nd.array(global2local, dtype=np.int64))
         server.init_data(name=data_name, data_tensor=mx.nd.array(ndata[key]))
 
     server.start()
@@ -51,20 +62,25 @@ def start_server(args):
     exit()  # exit program directly when finishing training
 
 def connect_to_kvstore(args, partition_book):
+    print('create client', args.id)
     client = dgl.contrib.KVClient(
         client_id=args.id,
         local_server_id=args.id,
         server_namebook=server_namebook,
-        client_addr=client_namebook[args.id],
-        partition_book=partition_book)
+        client_addr=client_namebook[args.id])
 
-    ndata = load_node_data(args)
+    ndata, mask = load_node_data(args)
+    part_nid = np.nonzero(mask)[0]
+    global2local = np.zeros(shape=(len(mask),), dtype=np.int64)
+    global2local[part_nid] = part_nid
     graph_name = args.graph_name
     # Initialize data on kvstore, the data_tensor is shared-memory data
     for key, val in ndata.items():
         data_name = graph_name + '_' + key
         print('client init {} from ndata[{}]'.format(data_name, key))
-        client.init_local_data(name=data_name, data_tensor=mx.nd.array(ndata[key]))
+        client.set_partition_book(data_name, mx.nd.array(partition_book, dtype=np.int64))
+        client.set_global_to_local(data_name, mx.nd.array(global2local, dtype=np.int64))
+        client.init_data(name=data_name, data_tensor=mx.nd.array(ndata[key]))
 
     client.connect()
 
@@ -78,8 +94,8 @@ def load_local_part(args):
     # TODO for now, I use pickle to store partitioned graph.
     if args.num_parts > 1:
         import pickle
-        part, part_nodes, part_loc = pickle.load(open('reddit_part_{}.pkl'.format(args.id), 'rb'))
-        all_locs = np.loadtxt('reddit.adj.part.{}'.format(args.num_parts))
+        part, part_nodes, part_loc = pickle.load(open('MAG0/MAG0_part_{}.pkl'.format(args.id), 'rb'))
+        all_locs = np.loadtxt('MAG0/MAG0.adj.part.{}'.format(args.num_parts))
         g = dgl.DGLGraph(part, readonly=True)
         g.ndata['global_id'] = mx.nd.array(part_nodes, dtype=np.int64)
         g.ndata['node_loc'] = mx.nd.array(part_loc, dtype=np.int64)
@@ -107,9 +123,24 @@ def main(args):
     # We need to set random seed here. Otherwise, all processes have the same mini-batches.
     mx.random.seed(args.id)
     local_mask = g.ndata['local'].astype(np.float32)
-    train_mask = get_from_kvstore(args, kv, g, 'train_mask').astype(np.float32) * local_mask
-    val_mask = get_from_kvstore(args, kv, g, 'val_mask').astype(np.float32) * local_mask
-    test_mask = get_from_kvstore(args, kv, g, 'test_mask').astype(np.float32) * local_mask
+
+    train_mask = np.zeros(g.number_of_nodes())
+    val_mask = np.zeros(g.number_of_nodes())
+    test_mask = np.zeros(g.number_of_nodes())
+    permute = np.random.permutation(g.number_of_nodes())
+    train_nid = permute[:int(len(permute) * 0.8)]
+    val_nid = permute[int(len(permute) * 0.8):int(len(permute) * 0.9)]
+    test_nid = permute[int(len(permute) * 0.9):]
+    train_mask[train_nid] = 1
+    val_mask[val_nid] = 1
+    test_mask[test_nid] = 1
+    train_mask = mx.nd.array(train_mask) * local_mask
+    val_mask = mx.nd.array(val_mask) * local_mask
+    test_mask = mx.nd.array(test_mask) * local_mask
+
+    #train_mask = get_from_kvstore(args, kv, g, 'train_mask').astype(np.float32) * local_mask
+    #val_mask = get_from_kvstore(args, kv, g, 'val_mask').astype(np.float32) * local_mask
+    #test_mask = get_from_kvstore(args, kv, g, 'test_mask').astype(np.float32) * local_mask
     print('train: {}, val: {}, test: {}'.format(mx.nd.sum(train_mask).asnumpy(),
         mx.nd.sum(val_mask).asnumpy(),
         mx.nd.sum(test_mask).asnumpy()))
