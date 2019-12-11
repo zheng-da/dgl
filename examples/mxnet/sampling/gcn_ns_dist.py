@@ -7,7 +7,7 @@ import dgl
 import dgl.function as fn
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
-
+from sklearn import metrics
 
 class NodeUpdate(gluon.Block):
     def __init__(self, in_feats, out_feats, activation=None, concat=False):
@@ -180,6 +180,9 @@ def gcn_ns_train(g, kv, ctx, args, n_classes, train_nid, test_nid):
         num_tests = 0
 
         start = time.time()
+        f1 = []
+        precision = []
+        recall = []
         for nf in dgl.contrib.sampling.NeighborSampler(g, args.test_batch_size,
                                                        g.number_of_nodes(),
                                                        neighbor_type='in',
@@ -187,12 +190,19 @@ def gcn_ns_train(g, kv, ctx, args, n_classes, train_nid, test_nid):
                                                        seed_nodes=test_nid):
             copy_from_kvstore(nf, kv, ctx, args.graph_name, ['feature', 'label'])
             pred = infer_model(nf)
-            batch_nids = nf.layer_parent_nid(-1)
+            pred = pred > 0
+
             batch_labels = nf.layers[-1].data['label']
-            num_acc += (pred.argmax(axis=1) == batch_labels).sum().asscalar()
+            labels = batch_labels.asnumpy().flatten()
+            pred = pred.asnumpy().flatten().astype(np.int64)
+            f1.append(metrics.f1_score(labels, pred))
+            precision.append(metrics.precision_score(labels, pred))
+            recall.append(metrics.recall_score(labels, pred))
+
             num_tests += nf.layer_size(-1)
             break
         eval_time = time.time() - start
 
-        print("Trainer {}: Test Accuracy {:.4f}, Train Time {:.4f}, Eval time {:.4f}". format(
-            args.id, num_acc/num_tests, train_time, eval_time))
+        print("Trainer {}: F1 {:.4f}, Train Time {:.4f}, Eval time {:.4f}". format(
+            args.id, np.mean(f1), train_time, eval_time))
+        print('precision: {:.4f}, recall: {:.4f}'.format(np.mean(precision), np.mean(recall)))

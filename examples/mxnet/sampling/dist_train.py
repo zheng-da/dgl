@@ -18,6 +18,11 @@ def load_node_data(args):
         all_locs = np.loadtxt('MAG0/MAG0.adj.part.{}'.format(args.num_parts))
         fos_spm = spsp.load_npz('MAG0/MAG0_fos.npz')[all_locs == args.id]
         titles = np.load('MAG0/MAG0_title_emb.npy')[all_locs == args.id]
+
+        fos_spm = fos_spm.tocsr()
+        fos_spm = fos_spm.tocoo()
+        fos_spm = spsp.coo_matrix((np.ones(fos_spm.nnz), (fos_spm.row, fos_spm.col)))
+
         ndata = {}
         ndata['feature'] = mx.nd.array(titles)
         ndata['label'] = mx.nd.array(fos_spm.todense())
@@ -40,7 +45,7 @@ def start_server(args):
     print('server {} loads data'.format(args.id))
     part_nid = np.nonzero(mask)[0]
     global2local = np.zeros(shape=(len(mask),), dtype=np.int64)
-    global2local[part_nid] = part_nid
+    global2local[part_nid] = np.arange(len(part_nid))
     graph_name = args.graph_name
 
     print('try to start server', args.id)
@@ -58,6 +63,7 @@ def start_server(args):
         server.init_data(name=data_name, data_tensor=mx.nd.array(ndata[key]))
 
     server.start()
+    print('server {} ends'.format(args.id))
 
     exit()  # exit program directly when finishing training
 
@@ -72,7 +78,7 @@ def connect_to_kvstore(args, partition_book):
     ndata, mask = load_node_data(args)
     part_nid = np.nonzero(mask)[0]
     global2local = np.zeros(shape=(len(mask),), dtype=np.int64)
-    global2local[part_nid] = part_nid
+    global2local[part_nid] = np.arange(len(part_nid))
     graph_name = args.graph_name
     # Initialize data on kvstore, the data_tensor is shared-memory data
     for key, val in ndata.items():
