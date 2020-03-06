@@ -223,6 +223,7 @@ class KEModel(object):
         if neg_g.neg_head:
             neg_head_ids = neg_g.ndata['id'][neg_g.head_nid]
             neg_head = self.entity_emb(neg_head_ids, gpu_id, trace)
+            neg_head = pad_emb(neg_head, num_chunks, neg_sample_size)
             head_ids, tail_ids = pos_g.all_edges(order='eid')
             if to_device is not None and gpu_id >= 0:
                 tail_ids = to_device(tail_ids, gpu_id)
@@ -249,6 +250,7 @@ class KEModel(object):
         else:
             neg_tail_ids = neg_g.ndata['id'][neg_g.tail_nid]
             neg_tail = self.entity_emb(neg_tail_ids, gpu_id, trace)
+            neg_tail = pad_emb(neg_tail, num_chunks, neg_sample_size)
             head_ids, tail_ids = pos_g.all_edges(order='eid')
             if to_device is not None and gpu_id >= 0:
                 head_ids = to_device(head_ids, gpu_id)

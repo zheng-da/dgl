@@ -7,6 +7,7 @@ import os
 import sys
 import pickle
 import time
+import math
 
 def SoftRelationPartition(edges, n, threshold=0.05):
     """This partitions a list of edges to n partitions according to their
@@ -346,7 +347,6 @@ class TrainDataset(object):
             Edge sampler
         """
         EdgeSampler = getattr(dgl.contrib.sampling, 'EdgeSampler')
-        assert batch_size % neg_sample_size == 0, 'batch_size should be divisible by B'
         return EdgeSampler(self.g,
                            seed_edges=F.tensor(self.edge_parts[rank]),
                            batch_size=batch_size,
@@ -435,11 +435,7 @@ def create_neg_subgraph(pos_g, neg_g, chunk_size, neg_sample_size, is_chunked,
         if pos_g.number_of_edges() < chunk_size:
             return None
         else:
-            # This is probably the last batch. Let's ignore it.
-            if pos_g.number_of_edges() % chunk_size > 0:
-                return None
-            num_chunks = int(pos_g.number_of_edges() / chunk_size)
-        assert num_chunks * chunk_size == pos_g.number_of_edges()
+            num_chunks = int(math.ceil(pos_g.number_of_edges() / chunk_size))
     else:
         num_chunks = pos_g.number_of_edges()
         chunk_size = 1
