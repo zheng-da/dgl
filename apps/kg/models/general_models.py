@@ -215,6 +215,14 @@ class KEModel(object):
         tensor
             The negative score
         """
+        def pad_emb(emb, num_chunks, neg_sample_size):
+            if emb.shape[0] == num_chunks * neg_sample_size:
+                return emb
+
+            num = emb.shape[0]
+            num_pad = num_chunks * neg_sample_size - num
+            pad = F.zeros((num_pad, emb.shape[1]), F.dtype(emb), F.context(emb))
+            return F.cat([emb, pad], 0)
         num_chunks = neg_g.num_chunks
         chunk_size = neg_g.chunk_size
         neg_sample_size = neg_g.neg_sample_size
@@ -228,7 +236,9 @@ class KEModel(object):
             if to_device is not None and gpu_id >= 0:
                 tail_ids = to_device(tail_ids, gpu_id)
             tail = pos_g.ndata['emb'][tail_ids]
+            tail = pad_emb(tail, num_chunks, chunk_size)
             rel = pos_g.edata['emb']
+            rel = pad_emb(rel, num_chunks, chunk_size)
 
             # When we train a batch, we could use the head nodes of the positive edges to
             # construct negative edges. We construct a negative edge between a positive head
@@ -255,7 +265,9 @@ class KEModel(object):
             if to_device is not None and gpu_id >= 0:
                 head_ids = to_device(head_ids, gpu_id)
             head = pos_g.ndata['emb'][head_ids]
+            head = pad_emb(head, num_chunks, chunk_size)
             rel = pos_g.edata['emb']
+            rel = pad_emb(rel, num_chunks, chunk_size)
 
             # This is negative edge construction similar to the above.
             if neg_deg_sample:
