@@ -776,10 +776,18 @@ class KVClient(object):
             assert response.msg == BARRIER_MSG
 
     def register_push_handler(self, func):
-        """Register UDF push function on server.
+        """Register UDF push function.
 
-        client_0 will send this request to all servers, and the other
-        clients will just invoke the barrier() api.
+        This UDF is triggered for every push. The signature of the UDF is
+
+        ```
+        def push_handler(data_store, name, local_offset, data)
+        ```
+
+        `data_store` is a dict that contains all tensors in the kvstore. `name` is the name
+        of the tensor where new data is pushed to. `local_offset` is the offset where new
+        data should be written in the tensor in the local partition. `data` is the new data
+        to be written.
 
         Parameters
         ----------
@@ -798,10 +806,17 @@ class KVClient(object):
         self.barrier()
 
     def register_pull_handler(self, func):
-        """Register UDF pull function on server.
+        """Register UDF pull function.
 
-        client_0 will send this request to all servers, and the other
-        clients will just invoke the barrier() api.
+        This UDF is triggered for every pull. The signature of the UDF is
+
+        ```
+        def pull_handler(data_store, name, local_offset)
+        ```
+
+        `data_store` is a dict that contains all tensors in the kvstore. `name` is the name
+        of the tensor where new data is pushed to. `local_offset` is the offset where new
+        data should be written in the tensor in the local partition.
 
         Parameters
         ----------
