@@ -106,8 +106,8 @@ class GraphPartitionBook:
         for partid in range(self._num_partitions):
             part_info = {}
             part_info['machine_id'] = partid
-            part_info['num_nodes'] = nid_count[partid]
-            part_info['num_edges'] = eid_count[partid]
+            part_info['num_nodes'] = int(nid_count[partid])
+            part_info['num_edges'] = int(eid_count[partid])
             self._partition_meta_data.append(part_info)
         # Get partid2nids
         self._partid2nids = []
@@ -154,7 +154,7 @@ class GraphPartitionBook:
             The graph name
         """
         self._meta, self._nid2partid, self._eid2partid = _move_metadata_to_shared_mam(
-            graph_name, self.num_nodes(), self.num_edges(), self._part_id, self._num_partitions,
+            graph_name, self._num_nodes(), self._num_edges(), self._part_id, self._num_partitions,
             self._nid2partid, self._eid2partid, False)
 
     def num_partitions(self):
@@ -190,12 +190,12 @@ class GraphPartitionBook:
         """
         return self._partition_meta_data
 
-    def num_nodes(self):
+    def _num_nodes(self):
         """ The total number of nodes
         """
         return len(self._nid2partid)
 
-    def num_edges(self):
+    def _num_edges(self):
         """ The total number of edges
         """
         return len(self._eid2partid)
@@ -345,9 +345,9 @@ class RangePartitionBook:
         partition id of current GraphPartitionBook
     num_parts : int
         number of total partitions
-    node_map : NumPy NDArray
+    node_map : tensor
         map global node id to partition id
-    edge_map : NumPy NDArray
+    edge_map : tensor
         map global edge id to partition id
     """
     def __init__(self, part_id, num_parts, node_map, edge_map):
@@ -355,8 +355,10 @@ class RangePartitionBook:
         assert num_parts > 0, 'num_parts must be greater than zero.'
         self._partid = part_id
         self._num_partitions = num_parts
-        self._node_map = node_map
-        self._edge_map = edge_map
+        node_map = utils.toindex(node_map)
+        edge_map = utils.toindex(edge_map)
+        self._node_map = node_map.tonumpy()
+        self._edge_map = edge_map.tonumpy()
         # Get meta data of GraphPartitionBook
         self._partition_meta_data = []
         for partid in range(self._num_partitions):
@@ -366,8 +368,8 @@ class RangePartitionBook:
             erange_end = edge_map[partid]
             part_info = {}
             part_info['machine_id'] = partid
-            part_info['num_nodes'] = nrange_end - nrange_start
-            part_info['num_edges'] = erange_end - erange_start
+            part_info['num_nodes'] = int(nrange_end - nrange_start)
+            part_info['num_edges'] = int(erange_end - erange_start)
             self._partition_meta_data.append(part_info)
 
     def shared_memory(self, graph_name):
@@ -379,7 +381,7 @@ class RangePartitionBook:
             The graph name
         """
         self._meta = _move_metadata_to_shared_mam(
-            graph_name, self.num_nodes(), self.num_edges(), self._partid,
+            graph_name, self._num_nodes(), self._num_edges(), self._partid,
             self._num_partitions, F.tensor(self._node_map), F.tensor(self._edge_map), True)
 
     def num_partitions(self):
@@ -393,15 +395,15 @@ class RangePartitionBook:
         return self._num_partitions
 
 
-    def num_nodes(self):
+    def _num_nodes(self):
         """ The total number of nodes
         """
-        return self._node_map[-1]
+        return int(self._node_map[-1])
 
-    def num_edges(self):
+    def _num_edges(self):
         """ The total number of edges
         """
-        return self._edge_map[-1]
+        return int(self._edge_map[-1])
 
     def metadata(self):
         """Return the partition meta data.

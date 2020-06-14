@@ -335,6 +335,12 @@ class DistGraph:
         self._default_init_ndata = _default_init_data
         self._default_init_edata = _default_init_data
 
+        self._num_nodes = 0
+        self._num_edges = 0
+        for part_md in self._gpb.metadata():
+            self._num_nodes += int(part_md['num_nodes'])
+            self._num_edges += int(part_md['num_edges'])
+
 
     def init_ndata(self, name, shape, dtype):
         '''Initialize node data
@@ -427,11 +433,11 @@ class DistGraph:
 
     def number_of_nodes(self):
         """Return the number of nodes"""
-        return self._gpb.num_nodes()
+        return self._num_nodes
 
     def number_of_edges(self):
         """Return the number of edges"""
-        return self._gpb.num_edges()
+        return self._num_edges
 
     def node_attr_schemes(self):
         """Return the node feature and embedding schemes."""
