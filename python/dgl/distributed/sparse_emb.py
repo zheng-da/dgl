@@ -1,9 +1,7 @@
 
 
 class SparseEmbedding:
-    def __init__(self, g, name, embedding_dim):
-        # TODO I need to initialize embeddings.
-        g.init_node_emb(name, (g.number_of_nodes(), embedding_dim))
+    def __init__(self, g, name):
         self._tensor = g.ndata[name]
         self._trace = []
 
@@ -16,7 +14,7 @@ class SparseEmbedding:
     def reset_parameters(self):
         pass
 
-def sparse_adagrad_optimize(name, ID, data, target):
+def sparse_adagrad_optimize(data_store, name, ID, data):
     ''' Update the embeddings with sparse Adagrad.
 
     This function runs on the KVStore server. It updates the gradients by scaling them
@@ -25,20 +23,19 @@ def sparse_adagrad_optimize(name, ID, data, target):
 
     Parameters
     ----------
+    data_store : dict of data
+        all data in the kvstore.
     name : str
         data name
     ID : tensor
         a vector storing the ID list.
     data : tensor (mx.ndarray or torch.tensor)
         a tensor with the same row size of id
-    target : dict of data
-        all data in the kvstore.
     '''
-    # TODO are all indices local?
     grad_indices = ID
     grad_values = data
-    embs = target[name]
-    state_sum = target[name + "_sum"]
+    embs = data_store[name]
+    state_sum = data_store[name + "_sum"]
     grad_sum = (grad_values * grad_values).mean(1)
     state_sum.index_add_(0, grad_indices, grad_sum)
     std = state_sum[grad_indices]  # _sparse_mask
@@ -54,7 +51,7 @@ class SparseAdagrad:
             name = emb._tensor.name
             kv = emb._tensor.kvstore
             kv.init_data(name=name + "_sum", (emb.shape[0],), emb.dtype, name)
-            # TODO we need to register a UDF to trigger optimizer for each push.
+        kv.register_push_handler(sparse_adagrad_optimize)
 
     def step(self):
         for emb for self._params:

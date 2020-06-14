@@ -331,6 +331,7 @@ class DistGraph:
         self._client.map_shared_data(self._gpb)
         self._ndata = NodeDataView(self)
         self._edata = EdgeDataView(self)
+        self._node_embs = []
         self._default_init_ndata = _default_init_data
         self._default_init_edata = _default_init_data
 
@@ -390,7 +391,7 @@ class DistGraph:
         assert shape[0] == self.number_of_nodes()
         self._client.init_data(_get_ndata_name(name), shape, dtype, 'node', self._gpb, initializer)
         self._ndata._add(name)
-        self._node_embs[name] = SparseEmbedding(g, ndata_name)
+        self._node_embs.append(SparseEmbedding(g, ndata_name))
 
     def get_node_embeddings(self):
         ''' Return node embeddings
