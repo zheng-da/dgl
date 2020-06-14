@@ -16,7 +16,6 @@ from .shared_mem_utils import _to_shared_mem, _get_ndata_path, _get_edata_path, 
 from .rpc_client import connect_to_server
 from .server_state import ServerState
 from .rpc_server import start_server
-from .sparse_emb import SparseEmbedding
 
 def _get_graph_path(graph_name):
     return "/" + graph_name
@@ -393,32 +392,6 @@ class DistGraph:
         self._client.init_data(_get_edata_name(name), shape, dtype, 'edge', self._gpb,
                                self._default_init_edata)
         self._edata._add(name)
-
-    def init_node_emb(self, name, shape, initializer):
-        ''' Initialize node embeddings.
-
-        This initializes the node embeddings in the distributed graph storage.
-
-        The signature of `initializer` is
-
-        ```
-        def initializer(shape, dtype)
-        ```
-
-        Parameters
-        ----------
-        name : string
-            The name of the node embeddings.
-        shape : tuple
-            The shape of the node embeddings.
-        initializer : callable
-            The initializer.
-        '''
-        assert shape[0] == self.number_of_nodes()
-        self._client.init_data(_get_ndata_name(name), shape, F.float32, 'node',
-                               self._gpb, initializer)
-        self._ndata._add(name)
-        self._node_embs.append(SparseEmbedding(self, name))
 
     def get_node_embeddings(self):
         ''' Return node embeddings
