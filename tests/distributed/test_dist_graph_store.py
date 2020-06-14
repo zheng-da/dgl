@@ -13,6 +13,7 @@ from dgl.graph_index import create_graph_index
 from dgl.data.utils import load_graphs, save_graphs
 from dgl.distributed import DistGraphServer, DistGraph
 from dgl.distributed import partition_graph, load_partition, GraphPartitionBook, node_split, edge_split
+from dgl.distributed import SparseAdagrad
 import backend as F
 import unittest
 import pickle
@@ -56,6 +57,9 @@ def run_server(graph_name, server_id, num_clients):
                         '/tmp/dist_graph/{}.json'.format(graph_name))
     print('start server', server_id)
     g.start()
+
+def emb_init(shape, dtype):
+    return F.zeros(shape, dtype, F.cpu())
 
 def run_client(graph_name, num_nodes, num_edges):
     g = DistGraph("kv_ip_config.txt", graph_name)

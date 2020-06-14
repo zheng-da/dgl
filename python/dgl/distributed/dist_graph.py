@@ -16,6 +16,7 @@ from .shared_mem_utils import _to_shared_mem, _get_ndata_path, _get_edata_path, 
 from .rpc_client import connect_to_server
 from .server_state import ServerState
 from .rpc_server import start_server
+from .sparse_emb import SparseEmbedding
 
 def _get_graph_path(graph_name):
     return "/" + graph_name
@@ -116,13 +117,16 @@ class DistTensor:
         The distributed graph object.
     name : string
         The name of the tensor.
+    part_policy : PartitionPolicy
+        The partition policy of the tensor
     '''
-    def __init__(self, g, name):
+    def __init__(self, g, name, part_policy):
         self.kvstore = g._client
         self._name = name
         dtype, shape, _ = g._client.get_data_meta(name)
         self._shape = shape
         self._dtype = dtype
+        self._part_policy = part_policy
 
     def __getitem__(self, idx):
         return self.kvstore.pull(name=self._name, id_tensor=idx)
@@ -133,6 +137,11 @@ class DistTensor:
 
     def __len__(self):
         return self._shape[0]
+
+    @property
+    def part_policy(self):
+        ''' Return the partition policy '''
+        return self._part_policy
 
     @property
     def shape(self):
@@ -160,13 +169,15 @@ class NodeDataView(MutableMapping):
         # When this is created, the server may already load node data. We need to
         # initialize the node data in advance.
         names = g._get_all_ndata_names()
-        self._data = {name: DistTensor(g, _get_ndata_name(name)) for name in names}
+        policy = PartitionPolicy("node", g.get_partition_book())
+        self._data = {name: DistTensor(g, _get_ndata_name(name), policy) for name in names}
 
     def _get_names(self):
         return list(self._data.keys())
 
     def _add(self, name):
-        self._data[name] = DistTensor(self._graph, _get_ndata_name(name))
+        policy = PartitionPolicy("node", self._graph.get_partition_book())
+        self._data[name] = DistTensor(self._graph, _get_ndata_name(name), policy)
 
     def __getitem__(self, key):
         return self._data[key]
@@ -205,13 +216,15 @@ class EdgeDataView(MutableMapping):
         # When this is created, the server may already load edge data. We need to
         # initialize the edge data in advance.
         names = g._get_all_edata_names()
-        self._data = {name: DistTensor(g, _get_edata_name(name)) for name in names}
+        policy = PartitionPolicy("edge", g.get_partition_book())
+        self._data = {name: DistTensor(g, _get_edata_name(name), policy) for name in names}
 
     def _get_names(self):
         return list(self._data.keys())
 
     def _add(self, name):
-        self._data[name] = DistTensor(self._graph, _get_edata_name(name))
+        policy = PartitionPolicy("edge", self._graph.get_partition_book())
+        self._data[name] = DistTensor(self._graph, _get_edata_name(name), policy)
 
     def __getitem__(self, key):
         return self._data[key]
@@ -280,8 +293,9 @@ class DistGraphServer(KVServer):
 
         # Init kvstore.
         self.gpb.shared_memory(graph_name)
-        self.add_part_policy(PartitionPolicy('node', server_id, self.gpb))
-        self.add_part_policy(PartitionPolicy('edge', server_id, self.gpb))
+        assert self.gpb.part_id == server_id
+        self.add_part_policy(PartitionPolicy('node', self.gpb))
+        self.add_part_policy(PartitionPolicy('edge', self.gpb))
 
         if not self.is_backup_server():
             for name in node_feats:
@@ -385,6 +399,12 @@ class DistGraph:
 
         This initializes the node embeddings in the distributed graph storage.
 
+        The signature of `initializer` is
+
+        ```
+        def initializer(shape, dtype)
+        ```
+
         Parameters
         ----------
         name : string
@@ -395,9 +415,10 @@ class DistGraph:
             The initializer.
         '''
         assert shape[0] == self.number_of_nodes()
-        self._client.init_data(_get_ndata_name(name), shape, dtype, 'node', self._gpb, initializer)
+        self._client.init_data(_get_ndata_name(name), shape, F.float32, 'node',
+                               self._gpb, initializer)
         self._ndata._add(name)
-        self._node_embs.append(SparseEmbedding(g, ndata_name))
+        self._node_embs.append(SparseEmbedding(self, name))
 
     def get_node_embeddings(self):
         ''' Return node embeddings
