@@ -1,6 +1,6 @@
 """Data loading components for neighbor sampling"""
 from .dataloader import BlockSampler
-from .. import transform, sampling
+from .. import transform, sampling, distributed
 
 class MultiLayerNeighborSampler(BlockSampler):
     """Sampler that builds computational dependency of node representations via
@@ -58,8 +58,14 @@ class MultiLayerNeighborSampler(BlockSampler):
 
     def sample_frontier(self, block_id, g, seed_nodes):
         fanout = self.fanouts[block_id]
-        if fanout is None:
-            frontier = transform.in_subgraph(g, seed_nodes)
+        if isinstance(g, distributed.DistGraph):
+            if fanout is None:
+                frontier = distributed.in_subgraph(g, seed_nodes)
+            else:
+                frontier = distributed.sample_neighbors(g, seed_nodes, fanout, replace=self.replace)
         else:
-            frontier = sampling.sample_neighbors(g, seed_nodes, fanout, replace=self.replace)
+            if fanout is None:
+                frontier = transform.in_subgraph(g, seed_nodes)
+            else:
+                frontier = sampling.sample_neighbors(g, seed_nodes, fanout, replace=self.replace)
         return frontier
