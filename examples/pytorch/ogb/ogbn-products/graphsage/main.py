@@ -141,6 +141,9 @@ def load_subtensor(g, labels, seeds, input_nodes, device):
 def run(args, device, data):
     # Unpack data
     train_nid, val_nid, test_nid, in_feats, labels, n_classes, g = data
+    train_nid = train_nid.numpy()
+    val_nid = val_nid.numpy()
+    test_nid = test_nid.numpy()
 
     # Create PyTorch DataLoader for constructing blocks
     sampler = dgl.dataloading.MultiLayerNeighborSampler(
@@ -215,14 +218,14 @@ if __name__ == '__main__':
     argparser.add_argument('--num-epochs', type=int, default=20)
     argparser.add_argument('--num-hidden', type=int, default=256)
     argparser.add_argument('--num-layers', type=int, default=3)
-    argparser.add_argument('--fan-out', type=str, default='5,10,15')
+    argparser.add_argument('--fan-out', type=str, default='15,10,5')
     argparser.add_argument('--batch-size', type=int, default=1000)
     argparser.add_argument('--val-batch-size', type=int, default=10000)
     argparser.add_argument('--log-every', type=int, default=20)
     argparser.add_argument('--eval-every', type=int, default=1)
     argparser.add_argument('--lr', type=float, default=0.003)
     argparser.add_argument('--dropout', type=float, default=0.5)
-    argparser.add_argument('--num-workers', type=int, default=4,
+    argparser.add_argument('--num-workers', type=int, default=0,
         help="Number of sampling processes. Use 0 for no extra process.")
     argparser.add_argument('--save-pred', type=str, default='')
     argparser.add_argument('--wd', type=float, default=0)
@@ -250,6 +253,6 @@ if __name__ == '__main__':
 
     # Run 10 times
     test_accs = []
-    for i in range(10):
+    for i in range(1):
         test_accs.append(run(args, device, data))
         print('Average test accuracy:', np.mean(test_accs), '±', np.std(test_accs))

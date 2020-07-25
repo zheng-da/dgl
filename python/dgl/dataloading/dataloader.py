@@ -299,6 +299,8 @@ class NodeCollator(Collator):
         if isinstance(items[0], tuple):
             # returns a list of pairs: group them by node types into a dict
             items = utils.group_as_dict(items)
+        else:
+            items = F.tensor(np.asarray(items), dtype=self.g.idtype)
         blocks = self.block_sampler.sample_blocks(self.g, items, return_eids=self.return_eids)
         output_nodes = blocks[-1].dstdata[NID]
         input_nodes = blocks[0].srcdata[NID]
