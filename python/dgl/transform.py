@@ -16,9 +16,11 @@ from .graph_index import _get_halo_subgraph_inner_node
 from .graph import unbatch
 from .convert import graph, bipartite, heterograph
 from . import utils
-from .base import EID, NID, DGLError
+from .base import EID, NID, DGLError, is_internal_column
 from . import ndarray as nd
-
+from .partition import metis_partition_assignment as hetero_metis_partition_assignment
+from .partition import partition_graph_with_halo as hetero_partition_graph_with_halo
+from .partition import metis_partition as hetero_metis_partition
 
 __all__ = [
     'line_graph',
@@ -948,6 +950,8 @@ def partition_graph_with_halo(g, node_part, extra_cached_hops, reshuffle=False):
     a dict of DGLGraphs
         The key is the partition Id and the value is the DGLGraph of the partition.
     '''
+    if isinstance(g, DGLHeteroGraph):
+        return hetero_partition_graph_with_halo(g, node_part, extra_cached_hops, reshuffle)
     assert len(node_part) == g.number_of_nodes()
     node_part = utils.toindex(node_part)
     if reshuffle:
@@ -1038,6 +1042,8 @@ def metis_partition_assignment(g, k, balance_ntypes=None, balance_edges=False):
     a 1-D tensor
         A vector with each element that indicates the partition Id of a vertex.
     '''
+    if isinstance(g, DGLHeteroGraph):
+        return hetero_metis_partition_assignment(g, k, balance_ntypes, balance_edges)
     # METIS works only on symmetric graphs.
     # The METIS runs on the symmetric graph to generate the node assignment to partitions.
     start = time.time()
@@ -1065,7 +1071,14 @@ def metis_partition_assignment(g, k, balance_ntypes=None, balance_edges=False):
 
     # When balancing edges in partitions, we use in-degree as one of the weights.
     if balance_edges:
-        vwgt.append(F.astype(g.in_degrees(), F.int64))
+        if balance_ntypes is None:
+            vwgt.append(F.astype(g.in_degrees(), F.int64))
+        else:
+            for ntype in uniq_ntypes:
+                nids = F.asnumpy(F.nonzero_1d(balance_ntypes == ntype))
+                degs = np.zeros((g.number_of_nodes(),), np.int64)
+                degs[nids] = F.asnumpy(g.in_degrees(nids))
+                vwgt.append(F.tensor(degs))
 
     # The vertex weights have to be stored in a vector.
     if len(vwgt) > 0:
@@ -1136,6 +1149,9 @@ def metis_partition(g, k, extra_cached_hops=0, reshuffle=False,
     a dict of DGLGraphs
         The key is the partition Id and the value is the DGLGraph of the partition.
     '''
+    if isinstance(g, DGLHeteroGraph):
+        return hetero_metis_partition(g, k, extra_cached_hops, reshuffle,
+                                      balance_ntypes, balance_edges)
     node_part = metis_partition_assignment(g, k, balance_ntypes, balance_edges)
     if node_part is None:
         return None
@@ -1449,6 +1465,8 @@ def to_block(g, dst_nodes=None, include_dst_in_src=True, copy_ndata=True, copy_e
             src = src_node_id[ntype]
             dst = dst_node_id[ntype]
             for key, value in g.nodes[ntype].data.items():
+                if is_internal_column(key):
+                    continue
                 ctx = F.context(value)
                 new_graph.srcnodes[ntype].data[key] = F.gather_row(value, F.copy_to(src, ctx))
                 new_graph.dstnodes[ntype].data[key] = F.gather_row(value, F.copy_to(dst, ctx))
@@ -1456,6 +1474,8 @@ def to_block(g, dst_nodes=None, include_dst_in_src=True, copy_ndata=True, copy_e
         for canonical_etype in g.canonical_etypes:
             eid = edge_id[canonical_etype]
             for key, value in g.edges[canonical_etype].data.items():
+                if is_internal_column(key):
+                    continue
                 ctx = F.context(value)
                 new_graph.edges[canonical_etype].data[key] = F.gather_row(
                     value, F.copy_to(eid, ctx))
