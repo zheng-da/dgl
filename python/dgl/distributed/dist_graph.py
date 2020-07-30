@@ -373,6 +373,22 @@ class DistGraph:
         return self._edata
 
     @property
+    def idtype(self):
+        """The dtype of graph index
+
+        Returns
+        -------
+        backend dtype object
+            th.int32/th.int64 or tf.int32/tf.int64 etc.
+
+        See Also
+        --------
+        long
+        int
+        """
+        return self._g.idtype
+
+    @property
     def ntypes(self):
         """Return the list of node types of this graph.
 
