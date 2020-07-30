@@ -137,25 +137,42 @@ def load_subtensor(g, labels, seeds, input_nodes, device):
     batch_labels = labels[seeds].to(device)
     return batch_inputs, batch_labels
 
+class NeighborSampler(object):
+    def __init__(self, g, fanouts):
+        self.g = g
+        self.fanouts = fanouts
+
+    def sample_blocks(self, seeds):
+        seeds = th.LongTensor(np.asarray(seeds))
+        blocks = []
+        for fanout in self.fanouts:
+            # For each seed node, sample ``fanout`` neighbors.
+            frontier = dgl.sampling.sample_neighbors(self.g, seeds, fanout, replace=False)
+            # Then we compact the frontier into a bipartite graph for message passing.
+            block = dgl.to_block(frontier, seeds)
+            # Obtain the seed nodes for next layer.
+            seeds = block.srcdata[dgl.NID]
+
+            blocks.insert(0, block)
+        return blocks
+
 #### Entry point
 def run(args, device, data):
     # Unpack data
     train_nid, val_nid, test_nid, in_feats, labels, n_classes, g = data
-    train_nid = train_nid.numpy()
-    val_nid = val_nid.numpy()
-    test_nid = test_nid.numpy()
 
     # Create PyTorch DataLoader for constructing blocks
-    sampler = dgl.dataloading.MultiLayerNeighborSampler(
-        [int(fanout) for fanout in args.fan_out.split(',')])
-    dataloader = dgl.dataloading.NodeDataLoader(
-        g,
-        train_nid,
-        sampler,
+    sampler = NeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')])
+
+    # Create PyTorch DataLoader for constructing blocks
+    dataloader = DataLoader(
+        dataset=train_nid.numpy(),
         batch_size=args.batch_size,
+        collate_fn=sampler.sample_blocks,
         shuffle=True,
         drop_last=False,
         num_workers=args.num_workers)
+
 
     # Define model and optimizer
     model = SAGE(in_feats, args.num_hidden, n_classes, args.num_layers, F.relu, args.dropout)
@@ -174,7 +191,9 @@ def run(args, device, data):
 
         # Loop over the dataloader to sample the computation dependency graph as a list of
         # blocks.
-        for step, (input_nodes, seeds, blocks) in enumerate(dataloader):
+        for step, blocks in enumerate(dataloader):
+            input_nodes = blocks[0].srcdata[dgl.NID]
+            seeds = blocks[-1].dstdata[dgl.NID]
             tic_step = time.time()
 
             # Load the input features as well as output labels
@@ -218,7 +237,7 @@ if __name__ == '__main__':
     argparser.add_argument('--num-epochs', type=int, default=20)
     argparser.add_argument('--num-hidden', type=int, default=256)
     argparser.add_argument('--num-layers', type=int, default=3)
-    argparser.add_argument('--fan-out', type=str, default='15,10,5')
+    argparser.add_argument('--fan-out', type=str, default='5,10,15')
     argparser.add_argument('--batch-size', type=int, default=1000)
     argparser.add_argument('--val-batch-size', type=int, default=10000)
     argparser.add_argument('--log-every', type=int, default=20)
