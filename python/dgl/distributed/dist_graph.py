@@ -17,7 +17,6 @@ from .graph_partition_book import PartitionPolicy, get_shared_mem_partition_book
 from .graph_partition_book import NODE_PART_POLICY, EDGE_PART_POLICY
 from .shared_mem_utils import _to_shared_mem, _get_ndata_path, _get_edata_path, DTYPE_DICT
 from . import rpc
-from .rpc_client import connect_to_server
 from .server_state import ServerState
 from .rpc_server import start_server
 from .dist_tensor import DistTensor, _get_data_name
@@ -313,7 +312,6 @@ class DistGraph:
                 self._client.add_data(_get_data_name(name, EDGE_PART_POLICY), edge_feats[name])
             rpc.set_num_client(1)
         else:
-            connect_to_server(ip_config=ip_config)
             self._client = KVClient(ip_config)
             g = _get_graph_from_shared_mem(graph_name)
             if g is not None:
