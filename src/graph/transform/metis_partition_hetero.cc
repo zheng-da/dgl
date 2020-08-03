@@ -17,13 +17,41 @@ namespace dgl {
 
 namespace transform {
 
+IdArray MetisReorder(UnitGraphPtr g, IdArray part_arr) {
+  // The index type of Metis needs to be compatible with DGL index type.
+  CHECK_EQ(sizeof(idx_t), sizeof(int64_t))
+    << "Metis only supports int64 graph for now";
+  // This is a symmetric graph, so in-csr and out-csr are the same.
+  const auto mat = g->GetCSRMatrix(0);
+
+  idx_t nvtxs = g->NumVertices(0);
+  idx_t *xadj = static_cast<idx_t *>(mat.indptr->data);
+  idx_t *adjncy = static_cast<idx_t *>(mat.indices->data);
+  idx_t *part = static_cast<idx_t *>(part_arr->data);
+  IdArray old2new_arr = aten::NewIdArray(nvtxs);
+  idx_t *old2new = static_cast<idx_t *>(old2new_arr->data);
+  METIS_CacheFriendlyReordering(nvtxs, xadj, adjncy, part, old2new);
+  return old2new_arr;
+}
+
+DGL_REGISTER_GLOBAL("partition._CAPI_DGLMetisReorder")
+  .set_body([](DGLArgs args, DGLRetValue *rv) {
+    HeteroGraphRef g = args[0];
+    IdArray part = args[1];
+    auto hgptr = std::dynamic_pointer_cast<HeteroGraph>(g.sptr());
+    CHECK(hgptr) << "Invalid HeteroGraph object";
+    CHECK_EQ(hgptr->relation_graphs().size(), 1)
+      << "Metis partition only supports HomoGraph";
+    auto ugptr = hgptr->relation_graphs()[0];
+    *rv = MetisReorder(ugptr, part);
+  });
+
 IdArray MetisPartition(UnitGraphPtr g, int k, NDArray vwgt_arr) {
   // The index type of Metis needs to be compatible with DGL index type.
   CHECK_EQ(sizeof(idx_t), sizeof(int64_t))
     << "Metis only supports int64 graph for now";
   // This is a symmetric graph, so in-csr and out-csr are the same.
   const auto mat = g->GetCSRMatrix(0);
-  //   const auto mat = g->GetInCSR()->ToCSRMatrix();
 
   idx_t nvtxs = g->NumVertices(0);
   idx_t ncon = 1;  // # balacing constraints.

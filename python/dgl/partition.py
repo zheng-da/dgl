@@ -83,11 +83,8 @@ def partition_graph_with_halo(g, node_part, extra_cached_hops, reshuffle=False):
     node_part = utils.toindex(node_part)
     if reshuffle:
         start = time.time()
-        node_part = node_part.tousertensor()
-        sorted_part, new2old_map = F.sort_1d(node_part)
-        new_node_ids = np.zeros((g.number_of_nodes(),), dtype=np.int64)
-        new_node_ids[F.asnumpy(new2old_map)] = np.arange(
-            0, g.number_of_nodes())
+        sorted_part, _ = F.sort_1d(node_part.tousertensor())
+        new_node_ids = metis_reorder(g, node_part)
         g = reorder_nodes(g, new_node_ids)
         node_part = utils.toindex(sorted_part)
         # We reassign edges in in-CSR. In this way, after partitioning, we can ensure
@@ -140,6 +137,12 @@ def partition_graph_with_halo(g, node_part, extra_cached_hops, reshuffle=False):
         subg_dict[i] = subg
     print('Construct subgraphs: {:.3f} seconds'.format(time.time() - start))
     return subg_dict
+
+
+def metis_reorder(g, node_part):
+    node_part = utils.toindex(node_part)
+    new_nid = _CAPI_DGLMetisReorder(g._graph, node_part.todgltensor())
+    return utils.toindex(new_nid).tousertensor()
 
 
 def metis_partition_assignment(g, k, balance_ntypes=None, balance_edges=False):
