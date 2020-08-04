@@ -1,18 +1,24 @@
 import dgl
 import torch as th
 
-def load_reddit():
-    from dgl.data import RedditDataset
+def load_builtin(name):
+    if name == 'reddit':
+        from dgl.data import RedditDataset
+        # load reddit data
+        data = RedditDataset(self_loop=True)
+    elif name == 'pubmed':
+        from dgl.data import CitationGraphDataset
+        data = CitationGraphDataset('pubmed')
+    else:
+        raise Exception('unknown dataset')
 
-    # load reddit data
-    data = RedditDataset(self_loop=True)
     train_mask = data.train_mask
     val_mask = data.val_mask
     features = th.Tensor(data.features)
     labels = th.LongTensor(data.labels)
 
     # Construct graph
-    g = data.graph
+    g = dgl.graph(data.graph)
     g.ndata['features'] = features
     g.ndata['labels'] = labels
     g.ndata['train_mask'] = th.BoolTensor(data.train_mask)

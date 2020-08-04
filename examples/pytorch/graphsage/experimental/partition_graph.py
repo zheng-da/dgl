@@ -4,12 +4,12 @@ import torch as th
 import argparse
 import time
 
-from load_graph import load_reddit, load_ogb
+from load_graph import load_builtin, load_ogb
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser("Partition builtin graphs")
     argparser.add_argument('--dataset', type=str, default='reddit',
-                           help='datasets: reddit, ogb-product, ogb-paper100M')
+                           help='datasets: reddit, pubmed, ogb-product, ogb-paper100M')
     argparser.add_argument('--num_parts', type=int, default=4,
                            help='number of partitions')
     argparser.add_argument('--part_method', type=str, default='metis',
@@ -24,7 +24,9 @@ if __name__ == '__main__':
 
     start = time.time()
     if args.dataset == 'reddit':
-        g, _ = load_reddit()
+        g, _ = load_builtin('reddit')
+    elif args.dataset == 'pubmed':
+        g, _ = load_builtin('pubmed')
     elif args.dataset == 'ogb-product':
         g, _ = load_ogb('ogbn-products')
     elif args.dataset == 'ogb-paper100M':
