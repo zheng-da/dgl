@@ -774,9 +774,6 @@ def _split_even(partition_book, rank, elements):
         rank = role.get_trainer_rank()
     assert rank < num_clients, \
             'The input rank ({}) is incorrect. #Trainers: {}'.format(rank, num_clients)
-    # This conversion of rank is to make the new rank aligned with partitioning.
-    client_id_in_part = rank  % num_client_per_part
-    rank = client_id_in_part + num_client_per_part * partition_book.partid
 
     if isinstance(elements, DistTensor):
         # Here we need to fetch all elements from the kvstore server.
@@ -801,13 +798,33 @@ def _split_even(partition_book, rank, elements):
             remain -= 1
             if remain == 0:
                 break
+    # Add 0 in the front.
+    sizes.insert(0, 0)
     offsets = np.cumsum(sizes)
     assert offsets[-1] == len(eles)
 
-    if rank == 0:
-        return eles[0:offsets[0]]
-    else:
-        return eles[offsets[rank-1]:offsets[rank]]
+    # Get the elements that belong to the partition.
+    start_rank = num_client_per_part * partition_book.partid
+    end_rank = start_rank + num_client_per_part
+    part_eles = eles[offsets[start_rank]:offsets[end_rank]]
+
+    # If there is only one client per partition, we can just return.
+    if num_client_per_part == 1:
+        return part_eles
+
+    # If there are more than one client in a partition, we need to randomly select a subset of
+    # elements in the partition for a client. We have to make sure that the set of elements
+    # for different clients are disjoint.
+    client_id_in_part = rank  % num_client_per_part
+    # We set the random seed for each partition, so that each process (client) in a partition
+    # permute the elements in a partition in the same way, so each process gets a disjoint subset
+    # of elements.
+    np.random.seed(partition_book.partid)
+    rand_idx = np.random.permutation(len(part_eles))
+    offsets = offsets[start_rank:(end_rank + 1)]
+    offsets -= offsets[0]
+    rand_idx = rand_idx[offsets[client_id_in_part]:offsets[client_id_in_part + 1]]
+    return part_eles[rand_idx]
 
 
 def node_split(nodes, partition_book=None, rank=None, force_even=True):
