@@ -50,11 +50,6 @@ class NeighborSampler(object):
 
             blocks.insert(0, block)
 
-        input_nodes = blocks[0].srcdata[dgl.NID]
-        seeds = blocks[-1].dstdata[dgl.NID]
-        batch_inputs, batch_labels = load_subtensor(self.g, seeds, input_nodes, "cpu")
-        blocks[0].srcdata['features'] = batch_inputs
-        blocks[-1].dstdata['labels'] = batch_labels
         return blocks
 
 class DistSAGE(nn.Module):
@@ -209,9 +204,12 @@ def run(args, device, data):
 
             # The nodes for input lies at the LHS side of the first block.
             # The nodes for output lies at the RHS side of the last block.
-            batch_inputs = blocks[0].srcdata['features']
-            batch_labels = blocks[-1].dstdata['labels']
+            start = time.time()
+            input_nodes = blocks[0].srcdata[dgl.NID]
+            seeds = blocks[-1].dstdata[dgl.NID]
+            batch_inputs, batch_labels = load_subtensor(g, seeds, input_nodes, device)
             batch_labels = batch_labels.long()
+            copy_time += time.time() - start
 
             num_seeds += len(blocks[-1].dstdata[dgl.NID])
             num_inputs += len(blocks[0].srcdata[dgl.NID])
@@ -227,14 +225,6 @@ def run(args, device, data):
             compute_end = time.time()
             forward_time += forward_end - start
             backward_time += compute_end - forward_end
-
-            # Aggregate gradients in multiple nodes.
-            if not args.standalone:
-                for param in model.parameters():
-                    if param.requires_grad and param.grad is not None:
-                        th.distributed.all_reduce(param.grad.data,
-                                                  op=th.distributed.ReduceOp.SUM)
-                        param.grad.data /= dgl.distributed.get_num_client()
 
             optimizer.step()
             update_time += time.time() - compute_end
