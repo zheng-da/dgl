@@ -81,6 +81,16 @@ CompactGraphs(
 std::tuple<HeteroGraphPtr, std::vector<IdArray>, std::vector<IdArray>>
 ToBlock(HeteroGraphPtr graph, const std::vector<IdArray> &rhs_nodes, bool include_rhs_in_lhs);
 
+struct ReorderNodesResult {
+  HeteroGraphPtr graph;
+  std::vector<IdArray> node_order_by_key;
+  std::vector<IdArray> num_nodes_by_key;
+};
+ReorderNodesResult ReorderNodes(
+    HeteroGraphPtr graph,
+    const std::vector<IdArray> &node_keys_by_ntype,
+    const std::vector<int> &num_keys_by_ntype);
+
 /*!
  * \brief Convert a multigraph to a simple graph.
  *

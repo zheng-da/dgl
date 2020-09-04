@@ -118,6 +118,88 @@ ToBlock(HeteroGraphPtr graph, const std::vector<IdArray> &rhs_nodes, bool includ
   return ret;
 }
 
+std::pair<IdArray, IdArray>
+CountingSort(IdArray keys, int num_keys) {
+  std::pair<IdArray, IdArray> result;
+  ATEN_ID_TYPE_SWITCH(keys->dtype, IdType, {
+    IdArray count = aten::Full(0, num_keys, keys->dtype.bits, keys->ctx);
+    IdType *count_data = count.Ptr<IdType>();
+    std::vector<IdType> offset(num_keys);
+    int64_t n = keys->shape[0];
+    IdArray ret = aten::NewIdArray(n, keys->ctx, keys->dtype.bits);
+    IdType *ret_data = ret.Ptr<IdType>();
+    const IdType *keys_data = keys.Ptr<IdType>();
+
+    for (int64_t i = 0; i < n; ++i)
+      ++count_data[keys_data[i]];
+    for (int64_t i = 0; i < num_keys; ++i)
+      offset[i] = (i == 0) ? 0 : offset[i - 1] + count_data[i - 1];
+    for (int64_t i = 0; i < n; ++i) {
+      ret_data[offset[keys_data[i]]] = i;
+      ++offset[keys_data[i]];
+    }
+
+    result = std::make_pair(count, ret);
+  });
+  return result;
+}
+
+ReorderNodesResult ReorderNodes(
+    HeteroGraphPtr graph,
+    const std::vector<IdArray> &node_keys_by_ntype,
+    const std::vector<int> &num_keys_by_ntype) {
+  const int64_t num_ntypes = graph->NumVertexTypes();
+  const int64_t num_etypes = graph->NumEdgeTypes();
+
+  ReorderNodesResult ret;
+  ret.node_order_by_key.resize(num_ntypes);
+  ret.num_nodes_by_key.resize(num_ntypes);
+  std::vector<IdArray> inv_order(num_ntypes);
+
+  for (int64_t ntype = 0; ntype < num_ntypes; ++ntype) {
+    const IdArray node_keys = node_keys_by_ntype[ntype];
+    const int num_keys = num_keys_by_ntype[ntype];
+    std::cout << aten::ToDebugString(node_keys) << ' ' << num_keys << std::endl;
+    auto sort_result = CountingSort(node_keys, num_keys);
+    ret.num_nodes_by_key[ntype] = sort_result.first;
+    ret.node_order_by_key[ntype] = sort_result.second;
+    std::cout << aten::ToDebugString(sort_result.first) << std::endl;
+    std::cout << aten::ToDebugString(sort_result.second) << std::endl;
+    inv_order[ntype] = aten::Scatter(
+        aten::Range(0, node_keys->shape[0], node_keys->dtype.bits, node_keys->ctx),
+        ret.node_order_by_key[ntype]);
+    std::cout << aten::ToDebugString(inv_order[ntype]) << std::endl;
+  }
+
+  const auto meta_graph = graph->meta_graph();
+
+  std::vector<HeteroGraphPtr> rel_graphs(num_etypes);
+  for (int64_t etype = 0; etype < num_etypes; ++etype) {
+    const auto src_dst_types = graph->GetEndpointTypes(etype);
+    const dgl_type_t srctype = src_dst_types.first;
+    const dgl_type_t dsttype = src_dst_types.second;
+    const EdgeArray &edges = graph->Edges(etype, "eid");
+
+    std::cout << aten::ToDebugString(inv_order[srctype]) << std::endl;
+    std::cout << aten::ToDebugString(inv_order[dsttype]) << std::endl;
+    std::cout << aten::ToDebugString(edges.src) << std::endl;
+    std::cout << aten::ToDebugString(edges.dst) << std::endl;
+    IdArray new_src = aten::IndexSelect(inv_order[srctype], edges.src);
+    IdArray new_dst = aten::IndexSelect(inv_order[dsttype], edges.dst);
+    std::cout << aten::ToDebugString(new_src) << std::endl;
+    std::cout << aten::ToDebugString(new_dst) << std::endl;
+    rel_graphs[etype] = CreateFromCOO(
+        srctype == dsttype ? 1 : 2, graph->NumVertices(srctype), graph->NumVertices(dsttype),
+        new_src, new_dst);
+  }
+  std::vector<int64_t> num_nodes_per_type(num_ntypes);
+  for (int64_t ntype = 0; ntype < num_ntypes; ++ntype)
+    num_nodes_per_type[ntype] = graph->NumVertices(ntype);
+
+  ret.graph = CreateHeteroGraph(meta_graph, rel_graphs, num_nodes_per_type);
+  return ret;
+}
+
 DGL_REGISTER_GLOBAL("transform._CAPI_DGLToBlock")
 .set_body([] (DGLArgs args, DGLRetValue *rv) {
     const HeteroGraphRef graph_ref = args[0];
@@ -143,6 +225,29 @@ DGL_REGISTER_GLOBAL("transform._CAPI_DGLToBlock")
     ret.push_back(induced_edges_ref);
 
     *rv = ret;
+  });
+
+DGL_REGISTER_GLOBAL("transform._CAPI_DGLReorderNodes")
+.set_body([] (DGLArgs args, DGLRetValue *rv) {
+    const HeteroGraphRef graph_ref = args[0];
+    const std::vector<IdArray> &node_keys_by_ntype = ListValueToVector<IdArray>(args[1]);
+    const std::vector<int> &num_keys_by_ntype = ListValueToVector<int>(args[2]);
+
+    auto ret = ReorderNodes(graph_ref.sptr(), node_keys_by_ntype, num_keys_by_ntype);
+
+    List<Value> node_order_by_key_ref;
+    for (IdArray &array : ret.node_order_by_key)
+      node_order_by_key_ref.push_back(Value(MakeValue(array)));
+    List<Value> num_nodes_by_key_ref;
+    for (IdArray &array : ret.num_nodes_by_key)
+      num_nodes_by_key_ref.push_back(Value(MakeValue(array)));
+
+    List<ObjectRef> result;
+    result.push_back(HeteroGraphRef(ret.graph));
+    result.push_back(node_order_by_key_ref);
+    result.push_back(num_nodes_by_key_ref);
+
+    *rv = result;
   });
 
 };  // namespace transform

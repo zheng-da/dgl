@@ -6,7 +6,7 @@ import numpy as np
 from scipy import sparse
 
 from ._ffi.function import _init_api
-from .base import dgl_warning, DGLError
+from .base import dgl_warning, DGLError, NID
 from . import convert
 from .heterograph import DGLHeteroGraph, DGLBlock
 from . import ndarray as nd
@@ -39,6 +39,7 @@ __all__ = [
     'metapath_reachable_graph',
     'compact_graphs',
     'to_block',
+    'reorder_nodes',
     'to_simple',
     'to_simple_graph',
     'as_immutable_graph',
@@ -1736,6 +1737,120 @@ def to_block(g, dst_nodes=None, include_dst_in_src=True):
     utils.set_new_frames(new_graph, node_frames=node_frames, edge_frames=edge_frames)
 
     return new_graph
+
+def reorder_nodes(g, node_keys):
+    """Reorder the nodes in the order of node_keys for each node type.
+
+    g : DGLGraph
+    node_keys : list
+
+    Return: tuple[DGLGraph, list[Tensor]]
+        The mapping from new graph's nodes to the original graph's nodes is stored as
+        feature ``dgl.NID``.
+
+    Examples
+
+    >>> g = dgl.graph(([0, 1, 2], [3, 4, 5]))
+
+    We assign partition IDs as [1, 0, 2, 2, 0, 1], meaning that node #0 is stored in partition
+    #1, node #1 is stored in partition #0, etc.
+
+    >>> g2, n = dgl.reorder_nodes(g, torch.LongTensor([1, 0, 2, 2, 0, 1]))
+
+    The second element is the number of occurrences for each key value (partition ID)
+
+    >>> n
+    [tensor([2, 2, 2])]
+
+    The nodes should be ordered as [1, 4, 0, 5, 2, 3] since this is the order of the
+    keys.  Node #1 and #4 will come first as they are in partition #0, followed by node
+    #0 and #5 which belong to partition #1, etc.
+
+    >>> g2.ndata[dgl.NID]
+    tensor([1, 4, 0, 5, 2, 3])
+
+    The edge orders are preserved: the first edge still connects the nodes corresponding to
+    #0 and #3, which maps to node #2 and #5.
+
+    >>> g2.edges()
+    (tensor([2, 0, 4]), tensor([5, 1, 3]))
+
+    Blocks is similar:
+
+    >>> g = dgl.graph(([0, 1, 2], [3, 4, 5]), num_nodes=8)
+    >>> block = dgl.to_block(g, [3, 4, 5, 6])
+    >>> block.srcdata[dgl.NID], block.dstdata[dgl.NID]
+    (tensor([3, 4, 5, 6, 0, 1, 2]), tensor([3, 4, 5, 6]))
+    >>> block.edges()
+    (tensor([4, 5, 6]), tensor([0, 1, 2]))
+
+    Suppose that the 8 nodes maps to 3 partitions like this:
+
+    >>> partition_id = torch.LongTensor([1, 0, 2, 2, 2, 0, 1, 0])
+
+    We find the partition IDs for input and output nodes:
+
+    >>> p_src = partition_id[block.srcdata[dgl.NID]]
+    >>> p_dst = partition_id[block.dstdata[dgl.NID]]
+    >>> p_src, p_dst
+    (tensor([2, 2, 0, 1, 1, 0, 2]), tensor([2, 2, 0, 1]))
+
+    Then we reorder the nodes in the block:
+
+    >>> b2, n = dgl.reorder_nodes(block, [p_src, p_dst])
+    >>> n
+    [tensor([2, 2, 3]), tensor([1, 1, 2])]
+    >>> b2.srcdata[dgl.NID], b2.dstdata[dgl.NID]
+    (tensor([2, 5, 3, 4, 0, 1, 6]), tensor([2, 3, 0, 1]))
+    >>> b2.edges()
+    (tensor([3, 1, 6]), tensor([2, 3, 0]))
+
+    You can verify that the edges are preserved:
+
+    >>> b2_src, b2_dst = b2.edges()
+    >>> b2.srcdata[dgl.NID][b2_src], b2.dstdata[dgl.NID][b2_dst]
+    (tensor([4, 5, 6]), tensor([0, 1, 2]))
+
+    If you want to recover the original node ID from the reordered block:
+
+    >>> input_nid = block.srcdata[dgl.NID][b2.srcdata[dgl.NID]]
+    >>> input_nid
+    tensor([5, 1, 6, 0, 3, 4, 2])
+    >>> partition_id[input_nid]
+    tensor([0, 0, 1, 1, 2, 2, 2])
+    >>> output_nid = block.dstdata[dgl.NID][b2.dstdata[dgl.NID]]
+    >>> output_nid
+    tensor([5, 6, 3, 4])
+    >>> partition_id[output_nid]
+    tensor([0, 1, 2, 2])
+
+    You can see that the original node IDs are indeed reordered by partition ID.
+    """
+    if isinstance(node_keys, list):
+        node_keys_nd = [F.to_dgl_nd(k) for k in node_keys]
+        num_keys = [F.asnumpy(k).max() + 1 for k in node_keys]
+    else:
+        assert len(g.ntypes) == 1
+        node_keys_nd = [F.to_dgl_nd(node_keys)]
+        num_keys = [F.asnumpy(node_keys).max() + 1]
+
+    new_graph_index, node_order_by_key_nd, num_nodes_by_key_nd = _CAPI_DGLReorderNodes(
+        g._graph, node_keys_nd, num_keys)
+
+    if g.is_block:
+        new_graph = DGLBlock(new_graph_index, (g.srctypes, g.dsttypes), g.etypes)
+        assert new_graph.is_unibipartite
+        for i, ntype in enumerate(g.srctypes):
+            new_graph.srcnodes[ntype].data[NID] = F.from_dgl_nd(node_order_by_key_nd[i])
+            new_graph.dstnodes[ntype].data[NID] = F.from_dgl_nd(
+                node_order_by_key_nd[i + len(g.srctypes)])
+    else:
+        new_graph = DGLHeteroGraph(new_graph_index, g.ntypes, g.etypes)
+
+        for i, ntype in enumerate(g.ntypes):
+            new_graph.nodes[ntype].data[NID] = F.from_dgl_nd(node_order_by_key_nd[i])
+
+    return new_graph, [F.from_dgl_nd(n) for n in num_nodes_by_key_nd]
 
 def to_simple(g,
               return_counts='count',
