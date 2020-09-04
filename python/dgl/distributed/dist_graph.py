@@ -824,7 +824,7 @@ def _split_even(partition_book, rank, elements):
     offsets = offsets[start_rank:(end_rank + 1)]
     offsets -= offsets[0]
     rand_idx = rand_idx[offsets[client_id_in_part]:offsets[client_id_in_part + 1]]
-    return part_eles[rand_idx]
+    return part_eles[np.sort(rand_idx)]
 
 
 def node_split(nodes, partition_book=None, rank=None, force_even=True):
