@@ -33,6 +33,7 @@ def load_subtensor(g, seeds, input_nodes, device):
 class NeighborSampler(object):
     def __init__(self, g, fanouts, sample_neighbors, device):
         self.g = g
+        self.pb = g.get_partition_book()
         self.fanouts = fanouts
         self.sample_neighbors = sample_neighbors
         self.device = device
@@ -45,10 +46,18 @@ class NeighborSampler(object):
             frontier = self.sample_neighbors(self.g, seeds, fanout, replace=True)
             # Then we compact the frontier into a bipartite graph for message passing.
             block = dgl.to_block(frontier, seeds)
-            # Obtain the seed nodes for next layer.
-            seeds = block.srcdata[dgl.NID]
 
-            blocks.insert(0, block)
+            src_nids = block.srcdata[dgl.NID]
+            dst_nids = block.dstdata[dgl.NID]
+            src_pids = pb.nid2partid(src_nids)
+            dst_pids = pb.nid2partid(dst_nids)
+            block1, part_occurs = dgl.reorder_nodes(block, [src_pids, dst_pids])
+            block1.srcdata[dgl.NID] = src_nids[block1.srcdata[dgl.NID]]
+            block1.dstdata[dgl.NID] = dst_nids[block1.dstdata[dgl.NID]]
+
+            # Obtain the seed nodes for next layer.
+            seeds = block1.srcdata[dgl.NID]
+            blocks.insert(0, block1)
 
         return blocks
 
