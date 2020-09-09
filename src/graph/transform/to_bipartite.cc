@@ -159,16 +159,16 @@ ReorderNodesResult ReorderNodes(
   for (int64_t ntype = 0; ntype < num_ntypes; ++ntype) {
     const IdArray node_keys = node_keys_by_ntype[ntype];
     const int num_keys = num_keys_by_ntype[ntype];
-    std::cout << aten::ToDebugString(node_keys) << ' ' << num_keys << std::endl;
+    //std::cout << aten::ToDebugString(node_keys) << ' ' << num_keys << std::endl;
     auto sort_result = CountingSort(node_keys, num_keys);
     ret.num_nodes_by_key[ntype] = sort_result.first;
     ret.node_order_by_key[ntype] = sort_result.second;
-    std::cout << aten::ToDebugString(sort_result.first) << std::endl;
-    std::cout << aten::ToDebugString(sort_result.second) << std::endl;
+    //std::cout << aten::ToDebugString(sort_result.first) << std::endl;
+    //std::cout << aten::ToDebugString(sort_result.second) << std::endl;
     inv_order[ntype] = aten::Scatter(
         aten::Range(0, node_keys->shape[0], node_keys->dtype.bits, node_keys->ctx),
         ret.node_order_by_key[ntype]);
-    std::cout << aten::ToDebugString(inv_order[ntype]) << std::endl;
+    //std::cout << aten::ToDebugString(inv_order[ntype]) << std::endl;
   }
 
   const auto meta_graph = graph->meta_graph();
@@ -180,14 +180,14 @@ ReorderNodesResult ReorderNodes(
     const dgl_type_t dsttype = src_dst_types.second;
     const EdgeArray &edges = graph->Edges(etype, "eid");
 
-    std::cout << aten::ToDebugString(inv_order[srctype]) << std::endl;
-    std::cout << aten::ToDebugString(inv_order[dsttype]) << std::endl;
-    std::cout << aten::ToDebugString(edges.src) << std::endl;
-    std::cout << aten::ToDebugString(edges.dst) << std::endl;
+    //std::cout << aten::ToDebugString(inv_order[srctype]) << std::endl;
+    //std::cout << aten::ToDebugString(inv_order[dsttype]) << std::endl;
+    //std::cout << aten::ToDebugString(edges.src) << std::endl;
+    //std::cout << aten::ToDebugString(edges.dst) << std::endl;
     IdArray new_src = aten::IndexSelect(inv_order[srctype], edges.src);
     IdArray new_dst = aten::IndexSelect(inv_order[dsttype], edges.dst);
-    std::cout << aten::ToDebugString(new_src) << std::endl;
-    std::cout << aten::ToDebugString(new_dst) << std::endl;
+    //std::cout << aten::ToDebugString(new_src) << std::endl;
+    //std::cout << aten::ToDebugString(new_dst) << std::endl;
     rel_graphs[etype] = CreateFromCOO(
         srctype == dsttype ? 1 : 2, graph->NumVertices(srctype), graph->NumVertices(dsttype),
         new_src, new_dst);
