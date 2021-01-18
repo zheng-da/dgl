@@ -145,25 +145,49 @@ def run(args, device, data):
     best_eval_acc = 0
     best_test_acc = 0
     for epoch in range(args.num_epochs):
+        sample_time = []
+        cpu_slice_time = []
+        cpu_gpu_copy_time = []
+        forward_time = []
+        backward_time = []
+        step_time = []
+
         tic = time.time()
 
         # Loop over the dataloader to sample the computation dependency graph as a list of
         # blocks.
+        tic_step = time.time()
         for step, (input_nodes, seeds, blocks) in enumerate(dataloader):
-            tic_step = time.time()
+            time1 = time.time()
+
+            # Load the input features as well as output labels
+            batch_inputs, batch_labels = load_subtensor(nfeat, labels, seeds, input_nodes)
+            time2 = time.time()
+
+            batch_inputs = batch_inputs.to(device)
+            batch_labels = batch_labels.to(device)
+            time3 = time.time()
 
             # copy block to gpu
             blocks = [blk.int().to(device) for blk in blocks]
 
-            # Load the input features as well as output labels
-            batch_inputs, batch_labels = load_subtensor(nfeat, labels, seeds, input_nodes)
-
             # Compute loss and prediction
+            time4 = time.time()
             batch_pred = model(blocks, batch_inputs)
             loss = loss_fcn(batch_pred, batch_labels)
+            time5 = time.time()
             optimizer.zero_grad()
             loss.backward()
+            time6 = time.time()
             optimizer.step()
+            time7 = time.time()
+
+            sample_time.append(time1 - tic_step)
+            cpu_slice_time.append(time2 - time1)
+            cpu_gpu_copy_time.append(time3 - time2)
+            forward_time.append(time5 - time4)
+            backward_time.append(time6 - time5)
+            step_time.append(time7 - time6)
 
             iter_tput.append(len(seeds) / (time.time() - tic_step))
             if step % args.log_every == 0:
@@ -171,9 +195,13 @@ def run(args, device, data):
                 gpu_mem_alloc = th.cuda.max_memory_allocated() / 1000000 if th.cuda.is_available() else 0
                 print('Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train Acc {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.1f} MB'.format(
                     epoch, step, loss.item(), acc.item(), np.mean(iter_tput[3:]), gpu_mem_alloc))
+            tic_step = time.time()
 
         toc = time.time()
         print('Epoch Time(s): {:.4f}'.format(toc - tic))
+        print('sample: {:.4f}, slice data: {:.4f}, cpu-to-gpu: {:.4f}, forward: {:.4f}, backward: {:.4f}, step: {:.4f}'.format(
+            np.mean(sample_time), np.mean(cpu_slice_time), np.mean(cpu_gpu_copy_time),
+            np.mean(forward_time), np.mean(backward_time), np.mean(step_time)))
         if epoch >= 5:
             avg += toc - tic
         if epoch % args.eval_every == 0 and epoch != 0:
@@ -219,8 +247,8 @@ if __name__ == '__main__':
     splitted_idx = data.get_idx_split()
     train_idx, val_idx, test_idx = splitted_idx['train'], splitted_idx['valid'], splitted_idx['test']
     graph, labels = data[0]
-    nfeat = graph.ndata.pop('feat').to(device)
-    labels = labels[:, 0].to(device)
+    nfeat = graph.ndata.pop('feat')
+    labels = labels[:, 0]
 
     in_feats = nfeat.shape[1]
     n_classes = (labels.max() + 1).item()
