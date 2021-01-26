@@ -8,6 +8,8 @@ from .. import ndarray as nd
 from .. import utils
 
 __all__ = [
+    'set_sample_buffer',
+    'sample_neighbors_with_buffer',
     'sample_neighbors',
     'select_topk']
 
@@ -171,6 +173,24 @@ def sample_neighbors(g, nodes, fanout, edge_dir='in', prob=None, replace=False,
     else:
         for i, etype in enumerate(ret.canonical_etypes):
             ret.edges[etype].data[EID] = induced_edges[i]
+
+    return ret
+
+def set_sample_buffer(buf):
+    buf = utils.toindex(buf)
+    _CAPI_DGLCreateSampleBuffer(buf.todgltensor())
+
+def sample_neighbors_with_buffer(g, seed_nodes):
+    assert len(g.etypes) == 1
+    assert len(g.ntypes) == 1
+    seed_nodes = utils.toindex(seed_nodes[g.ntypes[0]])
+    subgidx = _CAPI_DGLSampleWithBuffer(g._graph, seed_nodes.todgltensor())
+    induced_edges = subgidx.induced_edges
+    ret = DGLHeteroGraph(subgidx.graph, g.ntypes, g.etypes)
+
+    assert len(ret.etypes) == 1
+    for i, etype in enumerate(ret.canonical_etypes):
+        ret.edges[etype].data[EID] = induced_edges[i]
 
     return ret
 

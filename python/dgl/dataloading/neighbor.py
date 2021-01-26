@@ -1,6 +1,10 @@
 """Data loading components for neighbor sampling"""
 from .dataloader import BlockSampler
 from .. import sampling, subgraph, distributed
+from ..base import DGLError, EID
+import numpy as np
+import torch as th
+from collections import Counter
 
 class MultiLayerNeighborSampler(BlockSampler):
     """Sampler that builds computational dependency of node representations via
@@ -51,14 +55,21 @@ class MultiLayerNeighborSampler(BlockSampler):
     ...      ('user', 'plays', 'game'): 4,
     ...      ('game', 'played-by', 'user'): 3}] * 3)
     """
-    def __init__(self, fanouts, replace=False, return_eids=False):
-        super().__init__(len(fanouts), return_eids)
+    def __init__(self, fanouts,buffer,buffer_size, replace=False, return_eids=False):
+        super().__init__(len(fanouts),return_eids)
 
         self.fanouts = fanouts
         self.replace = replace
+        self.buffer = buffer
+        self.buffer_size = buffer_size
+        print(self.buffer)
+        sampling.set_sample_buffer(self.buffer)
 
     def sample_frontier(self, block_id, g, seed_nodes):
+
         fanout = self.fanouts[block_id]
+        buffer_size = self.buffer_size
+        buffer  = self.buffer
         if isinstance(g, distributed.DistGraph):
             if fanout is None:
                 # TODO(zhengda) There is a bug in the distributed version of in_subgraph.
@@ -70,7 +81,30 @@ class MultiLayerNeighborSampler(BlockSampler):
             if fanout is None:
                 frontier = subgraph.in_subgraph(g, seed_nodes)
             else:
-                frontier = sampling.sample_neighbors(g, seed_nodes, fanout, replace=self.replace)
+                ## added by jialin
+                if buffer_size==0:
+                    frontier = sampling.sample_neighbors(g, seed_nodes, fanout, replace=self.replace)
+                else:
+                    if block_id == 0:
+                        # num_nodes = g.num_nodes()
+                        # num_sample_nodes = int(buffer_size*num_nodes)  # a parameter that to tune
+                        # sample_nodes = np.random.permutation(num_nodes)[:num_sample_nodes]
+                        #sample_nodes = buffer
+                        #x_x, x_neighbor, x_eid = g.out_edges(sample_nodes, form='all')
+                        #E_id = x_eid[np.isin(x_neighbor.numpy(), seed_nodes['_N'])]
+                        #frontier = subgraph.edge_subgraph(g, E_id, preserve_nodes=True)
+
+                        frontier = sampling.sample_neighbors_with_buffer(g, seed_nodes)
+                        #f_src, f_dst = frontier.edges()
+                        #f1_src, f1_dst = frontier1.edges()
+                        #edge_dict = {}
+                        #for src, dst, eid in zip(f_src, f_dst, E_id):
+                        #    edge_dict[int(src) * 10000 + int(dst) + int(eid) * 1000000] = (src, dst)
+                        #for src, dst, eid in zip(f1_src, f1_dst, frontier1.edata[EID]):
+                        #    assert (int(src) * 10000 + int(dst) + int(eid) * 1000000) in edge_dict
+                    else:
+                        frontier = sampling.sample_neighbors(g, seed_nodes, fanout, replace=self.replace)
+
         return frontier
 
 class MultiLayerFullNeighborSampler(MultiLayerNeighborSampler):
@@ -102,4 +136,4 @@ class MultiLayerFullNeighborSampler(MultiLayerNeighborSampler):
     ...     train_on(blocks)
     """
     def __init__(self, n_layers, return_eids=False):
-        super().__init__([None] * n_layers, return_eids=return_eids)
+        super().__init__([None] * (n_layers),[None],[None], return_eids=return_eids)
