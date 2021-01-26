@@ -343,8 +343,8 @@ HeteroSubgraph SampleNeighborsWithBuffer(
     auto &offs = res.second;
     assert(offs.size() == sampled_ids.size());
     for (size_t j = 0; j < sampled_ids.size(); j++) {
-      src_ids.push_back(seed);
-      dst_ids.push_back(sampled_ids[j]);
+      dst_ids.push_back(seed);
+      src_ids.push_back(sampled_ids[j]);
       eids.push_back(edge_it.begin()[offs[j]]);
     }
   }
