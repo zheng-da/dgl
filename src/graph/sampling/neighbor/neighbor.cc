@@ -277,6 +277,26 @@ class hashtable
   }
 };
 
+template<class Iterator1, class Iterator2, class T>
+void set_intersection(Iterator1 begin1, Iterator1 end1,
+                      Iterator2 begin2, Iterator2 end2,
+                      std::vector<T> *out, std::vector<int64_t> *offs) {
+  Iterator1 it1 = begin1;
+  Iterator2 it2 = begin2;
+  while (it1 != end1 && it2 != end2) {
+    if (*it1 == *it2) {
+      out->push_back(*it1);
+      offs->push_back(it1 - begin1);
+      it1++;
+      it2++;
+    } else if (*it1 > *it2) {
+      it2++;
+    } else {
+      it1++;
+    }
+  }
+}
+
 template<class T>
 class BufferData {
   hashtable<T> map;
@@ -295,11 +315,8 @@ class BufferData {
     std::vector<int64_t> offs;
     // If this input vector is large, we can scan the input vector with the
     // sorted buffer to check the overlap.
-    if (len >= res.size() / 2) {
-      res.resize(std::max((size_t) len, res.size()));
-      auto it = std::set_intersection(raw_arr, raw_arr + len, arr.begin(), arr.end(), res.begin());
-      res.resize(it - res.begin());
-      // TODO we need to get offsets.
+    if (len >= arr.size() / 2) {
+      set_intersection(raw_arr, raw_arr + len, arr.begin(), arr.end(), &res, &offs);
     }
     else {
       // Otherwise, we iterate the elements in the input vector.
